@@ -182,96 +182,92 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const scanPayload = params.get('scan');
-    const sessionParam = params.get('session');
+    const sessionParam = params.get('session') || sessionId;
 
-    // 1. Check if we loaded a scan URL link
     if (scanPayload) {
-      if (sessionParam && sessionParam !== sessionId) {
-        // We are on the phone scanning! Connect to the computer's session SSE channel
-        const topicUrl = `https://ntfy.sh/qrcounter_${sessionParam}/sse`;
-        const eventSource = new EventSource(topicUrl);
+      // ============================================
+      // MOBILE COMPANION CLIENT (Opened via QR link)
+      // ============================================
+      setIsPhoneScanSuccess(true);
+      setLastPhoneScanVal(scanPayload);
+      setPhoneStatus('sending');
 
-        eventSource.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            const msgObj = JSON.parse(data.message);
+      // Connect to computer session's SSE topic to receive state feedback
+      const topicUrl = `https://ntfy.sh/qrcounter_${sessionParam}/sse`;
+      const eventSource = new EventSource(topicUrl);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const msgObj = JSON.parse(data.message);
+          
+          if (msgObj.type === 'STATE' && msgObj.lastPayload === scanPayload) {
+            setMobileStats({
+              count: msgObj.scanCount,
+              limit: msgObj.targetLimit
+            });
             
-            if (msgObj.type === 'STATE' && msgObj.lastPayload === scanPayload) {
-              setMobileStats({
-                count: msgObj.scanCount,
-                limit: msgObj.targetLimit
-              });
-              
-              if (msgObj.isComplete) {
-                setPhoneStatus('complete');
-              } else if (msgObj.duplicate) {
-                setPhoneStatus('duplicate');
-              } else {
-                setPhoneStatus('success');
-              }
+            if (msgObj.isComplete) {
+              setPhoneStatus('complete');
+            } else if (msgObj.duplicate) {
+              setPhoneStatus('duplicate');
+            } else {
+              setPhoneStatus('success');
             }
-          } catch (err) {
-            // Ignore other message formats
           }
-        };
+        } catch (err) {
+          // Ignore other message formats
+        }
+      };
 
-        // Send the scan request to the channel
-        const sendScanRequest = async () => {
-          await publishScanToChannel(sessionParam, scanPayload);
-        };
+      // Publish the scan event to the ntfy channel
+      const sendScanRequest = async () => {
+        await publishScanToChannel(sessionParam, scanPayload);
+      };
 
-        setTimeout(sendScanRequest, 600);
+      // Trigger the request after a short delay to allow SSE connection to establish
+      setTimeout(sendScanRequest, 800);
 
-        setIsPhoneScanSuccess(true);
-        setLastPhoneScanVal(scanPayload);
+      // Keep the session parameter in mobile URL bar for clean refreshing if needed
+      const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionParam}`;
+      window.history.replaceState({}, document.title, cleanUrl);
 
-        // Keep session in URL bar on mobile
-        const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionParam}`;
-        window.history.replaceState({}, document.title, cleanUrl);
-
-        return () => {
-          eventSource.close();
-        };
-      } else {
-        // We are scanning on the main machine directly
-        setTimeout(() => {
-          handleScanSuccess(scanPayload);
-        }, 500);
-
-        // Clean scan parameters but keep session in URL bar
-        const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
-        window.history.replaceState({}, document.title, cleanUrl);
-      }
+      return () => {
+        eventSource.close();
+      };
     } else {
-      // Push session room to browser URL bar
+      // ============================================
+      // MAIN COMPUTER DASHBOARD CLIENT
+      // ============================================
+      // Ensure session parameter is pushed to the computer browser's URL address bar
       const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
       window.history.replaceState({}, document.title, cleanUrl);
+
+      // Listen for incoming mobile scans via ntfy.sh SSE stream
+      const topicUrl = `https://ntfy.sh/qrcounter_${sessionId}/sse`;
+      const eventSource = new EventSource(topicUrl);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const msgObj = JSON.parse(data.message);
+          
+          if (msgObj.type === 'SCAN' && msgObj.payload) {
+            handleScanSuccess(msgObj.payload);
+          }
+        } catch (err) {
+          // Fallback support for raw text payloads (e.g. older versions)
+          const data = JSON.parse(event.data);
+          if (data.message) {
+            handleScanSuccess(data.message);
+          }
+        }
+      };
+
+      return () => {
+        eventSource.close();
+      };
     }
-
-    // 2. Main screen listener: Connect to ntfy.sh EventSource for real-time counts
-    const topicUrl = `https://ntfy.sh/qrcounter_${sessionId}/sse`;
-    const eventSource = new EventSource(topicUrl);
-
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        const msgObj = JSON.parse(data.message);
-        
-        if (msgObj.type === 'SCAN' && msgObj.payload) {
-          handleScanSuccess(msgObj.payload);
-        }
-      } catch (err) {
-        // Backward compatibility for raw text payloads
-        const data = JSON.parse(event.data);
-        if (data.message) {
-          handleScanSuccess(data.message);
-        }
-      }
-    };
-
-    return () => {
-      eventSource.close();
-    };
   }, [sessionId]);
 
   const handleScanFailure = (errorMsg) => {
