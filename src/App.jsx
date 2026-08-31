@@ -256,18 +256,21 @@ export default function App() {
           
           try {
             const msgObj = JSON.parse(data.message);
-            if (msgObj.type === 'STATE' && msgObj.lastPayload === scanPayload) {
-              setMobileStats({
-                count: msgObj.scanLog ? msgObj.scanLog.length : 0,
-                limit: msgObj.targetLimit
-              });
-              
-              if (msgObj.isComplete) {
-                setPhoneStatus('complete');
-              } else if (msgObj.duplicate) {
-                setPhoneStatus('duplicate');
-              } else {
-                setPhoneStatus('success');
+            if (msgObj.type === 'STATE') {
+              const isPayloadInLog = msgObj.scanLog && msgObj.scanLog.some(item => item.payload === scanPayload);
+              if (isPayloadInLog || msgObj.lastPayload === scanPayload) {
+                setMobileStats({
+                  count: msgObj.scanLog ? msgObj.scanLog.length : 0,
+                  limit: msgObj.targetLimit
+                });
+                
+                if (msgObj.isComplete) {
+                  setPhoneStatus('complete');
+                } else if (msgObj.duplicate) {
+                  setPhoneStatus('duplicate');
+                } else {
+                  setPhoneStatus('success');
+                }
               }
             }
           } catch (e) {
