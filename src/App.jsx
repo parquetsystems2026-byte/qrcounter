@@ -8,7 +8,7 @@ export default function App() {
   const [targetLimit, setTargetLimit] = useState(15);
   const [scanLog, setScanLog] = useState([]);
   const [activeTab, setActiveTab] = useState('generator'); // 'scanner' | 'generator' | 'help'
-  const [allowDuplicates, setAllowDuplicates] = useState(false);
+  const [allowDuplicates, setAllowDuplicates] = useState(true);
   const [isTargetReached, setIsTargetReached] = useState(false);
   const [toast, setToast] = useState(null);
   const [alertMessage, setAlertMessage] = useState(null); // { text, type: 'success' | 'warning' }
@@ -205,10 +205,13 @@ export default function App() {
   // Helper to publish states to ntfy.sh
   const publishState = async (sessionRoom, stateObj) => {
     try {
-      await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
+      const response = await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
         method: 'POST',
         body: JSON.stringify(stateObj)
       });
+      if (response.status === 429) {
+        showToast('Sync rate-limited. Please close other duplicate browser tabs!', 'warning');
+      }
     } catch (err) {
       console.error('Failed to publish state:', err);
     }
@@ -217,13 +220,16 @@ export default function App() {
   // Publish a scanned payload to ntfy.sh (triggered from the phone scanner client)
   const publishScanToChannel = async (sessionRoom, payload) => {
     try {
-      await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
+      const response = await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
         method: 'POST',
         body: JSON.stringify({
           type: 'SCAN',
           payload
         })
       });
+      if (response.status === 429) {
+        showToast('Sync rate-limited. Please close other duplicate browser tabs!', 'warning');
+      }
     } catch (err) {
       console.error('Failed to publish scan to channel:', err);
       showToast('Sync server offline', 'warning');
