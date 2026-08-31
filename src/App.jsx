@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle, Camera } from 'lucide-react';
+import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle, Camera, RefreshCw } from 'lucide-react';
 import Scanner from './components/Scanner';
 import Generator from './components/Generator';
 import CompletionModal from './components/CompletionModal';
@@ -7,7 +7,7 @@ import CompletionModal from './components/CompletionModal';
 export default function App() {
   const [targetLimit, setTargetLimit] = useState(15);
   const [scanLog, setScanLog] = useState([]);
-  const [activeTab, setActiveTab] = useState('scanner'); // 'scanner' | 'generator' | 'help'
+  const [activeTab, setActiveTab] = useState('generator'); // 'scanner' | 'generator' | 'help'
   const [allowDuplicates, setAllowDuplicates] = useState(false);
   const [isTargetReached, setIsTargetReached] = useState(false);
   const [toast, setToast] = useState(null);
@@ -567,18 +567,18 @@ export default function App() {
         <main className="card" style={{ display: 'flex', flexDirection: 'column' }}>
           <div className="tabs-header">
             <button
-              className={`tab-btn ${activeTab === 'scanner' ? 'active' : ''}`}
-              onClick={() => setActiveTab('scanner')}
-            >
-              <ShieldCheck size={16} />
-              Scanner View
-            </button>
-            <button
               className={`tab-btn ${activeTab === 'generator' ? 'active' : ''}`}
               onClick={() => setActiveTab('generator')}
             >
               <QrCode size={16} />
               QR Generator
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'scanner' ? 'active' : ''}`}
+              onClick={() => setActiveTab('scanner')}
+            >
+              <ShieldCheck size={16} />
+              Scanner View
             </button>
           </div>
 
