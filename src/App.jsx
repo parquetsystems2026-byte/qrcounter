@@ -86,6 +86,7 @@ export default function App() {
     setAlertMessage(null); // Clear active alerts
     showToast('Session reset successfully. Ready to scan!', 'info');
     playBeep('success');
+    broadcastState([], targetLimit, false, false, 'RESET');
   };
 
   // Handle a new successful QR scan
@@ -112,13 +113,7 @@ export default function App() {
       });
       
       // Publish state back to SSE topic: duplicate = true
-      publishState(sessionId, {
-        type: 'STATE',
-        scanCount: scanLog.length,
-        targetLimit,
-        duplicate: true,
-        lastPayload: decodedText
-      });
+      broadcastState(scanLog, targetLimit, isTargetReached, true, decodedText);
       return;
     }
 
@@ -154,14 +149,7 @@ export default function App() {
     }
 
     // Publish state back to SSE topic: duplicate = false
-    publishState(sessionId, {
-      type: 'STATE',
-      scanCount: updatedLog.length,
-      targetLimit,
-      duplicate: false,
-      lastPayload: decodedText,
-      isComplete: isLimitHit
-    });
+    broadcastState(updatedLog, targetLimit, isLimitHit, false, decodedText);
   };
 
   // Update ref to hold latest state values and scan success handler
@@ -169,6 +157,18 @@ export default function App() {
     scanSuccessRef.current = handleScanSuccess;
     stateRef.current = { targetLimit, scanLog, allowDuplicates, isTargetReached };
   });
+
+  // Helper function to broadcast state to all clients in the room
+  function broadcastState(updatedLog, limit, isComplete, duplicate, lastPayload) {
+    publishState(sessionId, {
+      type: 'STATE',
+      scanLog: updatedLog,
+      targetLimit: limit,
+      isComplete,
+      duplicate,
+      lastPayload
+    });
+  }
 
   // Helper to publish states to ntfy.sh
   const publishState = async (sessionRoom, stateObj) => {
@@ -226,7 +226,7 @@ export default function App() {
             const msgObj = JSON.parse(data.message);
             if (msgObj.type === 'STATE' && msgObj.lastPayload === scanPayload) {
               setMobileStats({
-                count: msgObj.scanCount,
+                count: msgObj.scanLog ? msgObj.scanLog.length : 0,
                 limit: msgObj.targetLimit
               });
               
@@ -286,14 +286,59 @@ export default function App() {
 
           try {
             const msgObj = JSON.parse(messageStr);
+            
+            // 1. If it's a SCAN request, only the Desktop client processes it
             if (msgObj.type === 'SCAN' && msgObj.payload) {
-              if (scanSuccessRef.current) {
+              const isDesktop = !/Mobi|Android|iPhone/i.test(navigator.userAgent);
+              if (isDesktop && scanSuccessRef.current) {
                 scanSuccessRef.current(msgObj.payload);
               }
             }
+            
+            // 2. If it's a STATE update, synchronise the dashboard view on mobile/other clients
+            if (msgObj.type === 'STATE') {
+              const currentLocalLog = stateRef.current.scanLog;
+              const incomingLogLength = msgObj.scanLog ? msgObj.scanLog.length : 0;
+              
+              if (incomingLogLength !== currentLocalLog.length || msgObj.targetLimit !== stateRef.current.targetLimit) {
+                // Play notification beeps locally if a new scan was registered by someone else
+                if (incomingLogLength > currentLocalLog.length && msgObj.lastPayload !== 'LIMIT_CHANGE' && msgObj.lastPayload !== 'RESET') {
+                  if (msgObj.isComplete) {
+                    playBeep('complete');
+                    showToast('Scan target limit reached!', 'success');
+                  } else {
+                    playBeep('success');
+                    showToast(`Scan #${incomingLogLength} recorded: "${msgObj.lastPayload}"`, 'success');
+                  }
+                }
+                
+                // Update local states
+                if (msgObj.scanLog) setScanLog(msgObj.scanLog);
+                if (msgObj.targetLimit) setTargetLimit(msgObj.targetLimit);
+                setIsTargetReached(!!msgObj.isComplete);
+                
+                // Set dismissible alert banners locally
+                if (msgObj.lastPayload === 'RESET') {
+                  setAlertMessage(null);
+                } else if (msgObj.lastPayload === 'LIMIT_CHANGE') {
+                  // Ignore limit changes for alerts
+                } else if (msgObj.duplicate) {
+                  setAlertMessage({
+                    text: `Already Scanned: This QR code ("${msgObj.lastPayload}") has already been scanned in this session. Please use a different QR code.`,
+                    type: 'warning'
+                  });
+                } else {
+                  setAlertMessage({
+                    text: `Scanned Successfully: QR code "${msgObj.lastPayload}" has been recorded.`,
+                    type: 'success'
+                  });
+                }
+              }
+            }
           } catch (e) {
-            // Fallback: If payload is raw text (e.g. older versions), run directly
-            if (scanSuccessRef.current) {
+            // Fallback: If payload is raw text, only desktop processes it
+            const isDesktop = !/Mobi|Android|iPhone/i.test(navigator.userAgent);
+            if (isDesktop && scanSuccessRef.current) {
               scanSuccessRef.current(messageStr);
             }
           }
