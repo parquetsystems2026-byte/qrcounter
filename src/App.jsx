@@ -202,10 +202,10 @@ export default function App() {
     });
   }
 
-  // Helper to publish states to ntfy.sh
+  // Helper to publish states to ntfy.ch
   const publishState = async (sessionRoom, stateObj) => {
     try {
-      const response = await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
+      const response = await fetch(`https://ntfy.ch/qrcounter_${sessionRoom}`, {
         method: 'POST',
         body: JSON.stringify(stateObj)
       });
@@ -217,10 +217,10 @@ export default function App() {
     }
   };
 
-  // Publish a scanned payload to ntfy.sh (triggered from the phone scanner client)
+  // Publish a scanned payload to ntfy.ch (triggered from the phone scanner client)
   const publishScanToChannel = async (sessionRoom, payload) => {
     try {
-      const response = await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
+      const response = await fetch(`https://ntfy.ch/qrcounter_${sessionRoom}`, {
         method: 'POST',
         body: JSON.stringify({
           type: 'SCAN',
@@ -251,7 +251,7 @@ export default function App() {
       setPhoneStatus('sending');
 
       // Connect to computer session's SSE topic to receive state feedback
-      const topicUrl = `https://ntfy.sh/qrcounter_${sessionParam}/sse`;
+      const topicUrl = `https://ntfy.ch/qrcounter_${sessionParam}/sse`;
       const eventSource = new EventSource(topicUrl);
 
       eventSource.onmessage = (event) => {
@@ -310,8 +310,8 @@ export default function App() {
       const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
       window.history.replaceState({}, document.title, cleanUrl);
 
-      // Listen for incoming mobile scans via ntfy.sh SSE stream
-      const topicUrl = `https://ntfy.sh/qrcounter_${sessionId}/sse`;
+      // Listen for incoming mobile scans via ntfy.ch SSE stream
+      const topicUrl = `https://ntfy.ch/qrcounter_${sessionId}/sse`;
       const eventSource = new EventSource(topicUrl);
 
       eventSource.onmessage = (event) => {
@@ -417,7 +417,7 @@ export default function App() {
       // Send a sync request to fetch active room data from the laptop if it is already running
       const requestSync = async () => {
         try {
-          await fetch(`https://ntfy.sh/qrcounter_${sessionId}`, {
+          await fetch(`https://ntfy.ch/qrcounter_${sessionId}`, {
             method: 'POST',
             body: JSON.stringify({ type: 'SYNC_REQUEST' })
           });
