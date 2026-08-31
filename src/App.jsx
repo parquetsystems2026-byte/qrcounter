@@ -823,14 +823,35 @@ export default function App() {
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '1.25rem'
+            gap: '1.25rem',
+            position: 'relative'
           }}>
+            {/* Top-Right Dismiss Button */}
+            <button 
+              onClick={() => setShowMobileScanPopup(false)}
+              style={{
+                position: 'absolute',
+                top: '0.75rem',
+                right: '0.75rem',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '1.5rem',
+                color: 'var(--text-muted)',
+                fontWeight: 'bold',
+                lineHeight: 1,
+                padding: '0.25rem'
+              }}
+            >
+              &times;
+            </button>
+
             {mobilePopupStatus === 'sending' && (
               <>
                 <RefreshCw className="animate-spin" size={48} style={{ color: 'var(--secondary)' }} />
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Transmitting Scan...</h3>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                  Registering <strong>{mobilePopupPayload}</strong> on the laptop dashboard...
+                  Registering scan payload <strong>{mobilePopupPayload}</strong>...
                 </p>
               </>
             )}
@@ -838,9 +859,9 @@ export default function App() {
             {mobilePopupStatus === 'success' && (
               <>
                 <CheckCircle2 size={48} style={{ color: 'var(--primary)' }} />
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>Scanned Successfully!</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.4' }}>
-                  QR code <strong>{mobilePopupPayload}</strong> has been registered on the dashboard.
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>Scan Successful!</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '1rem', fontWeight: 600, marginTop: '-0.25rem' }}>
+                  Counter Updated
                 </p>
               </>
             )}
