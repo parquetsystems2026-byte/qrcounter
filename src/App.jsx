@@ -7,7 +7,7 @@ import CompletionModal from './components/CompletionModal';
 export default function App() {
   const [targetLimit, setTargetLimit] = useState(15);
   const [scanLog, setScanLog] = useState([]);
-  const [activeTab, setActiveTab] = useState('scanner'); // 'scanner' | 'generator' | 'help'
+  const [activeTab, setActiveTab] = useState('generator'); // 'scanner' | 'generator' | 'help'
   const [allowDuplicates, setAllowDuplicates] = useState(false);
   const [isTargetReached, setIsTargetReached] = useState(false);
   const [toast, setToast] = useState(null);
@@ -238,43 +238,13 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Dashboard Tabs & Main Panels */}
+        {/* Dashboard Generator Panel */}
         <main className="card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div className="tabs-header">
-            <button
-              className={`tab-btn ${activeTab === 'scanner' ? 'active' : ''}`}
-              onClick={() => setActiveTab('scanner')}
-            >
-              <ShieldCheck size={16} />
-              Scanner View
-            </button>
-            <button
-              className={`tab-btn ${activeTab === 'generator' ? 'active' : ''}`}
-              onClick={() => setActiveTab('generator')}
-            >
-              <QrCode size={16} />
-              QR Generator
-            </button>
-            
-          </div>
-
           <div style={{ flex: 1 }}>
-            {activeTab === 'scanner' && (
-              <Scanner
-                onScanSuccess={handleScanSuccess}
-                onScanFailure={handleScanFailure}
-                isDisabled={isTargetReached}
-              />
-            )}
-
-            {activeTab === 'generator' && (
-              <Generator
-                onSimulateScan={handleScanSuccess}
-                isDisabled={isTargetReached}
-              />
-            )}
-
-            
+            <Generator
+              onSimulateScan={handleScanSuccess}
+              isDisabled={isTargetReached}
+            />
           </div>
         </main>
       </div>
@@ -298,7 +268,7 @@ export default function App() {
           <div className="empty-state">
             <QrCode className="empty-state-icon" size={32} />
             <h3>No codes scanned yet</h3>
-            <p>Go to Scanner View and point your camera or upload an image to begin.</p>
+            <p>Generate QR Codes on the right and click "Simulate Scan" to begin.</p>
           </div>
         ) : (
           <div className="log-list">

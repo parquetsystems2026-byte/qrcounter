@@ -124,7 +124,7 @@ export default function Generator({ onSimulateScan, isDisabled }) {
           </button>
         </div>
 
-        <button
+        {/* <button
           className="btn btn-primary"
           onClick={handleSimulate}
           disabled={!qrId || isDisabled}
@@ -132,7 +132,7 @@ export default function Generator({ onSimulateScan, isDisabled }) {
         >
           <Play size={16} />
           Simulate Scan
-        </button>
+        </button> */}
       </div>
     </div>
   );
