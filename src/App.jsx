@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle, Camera, RefreshCw } from 'lucide-react';
+import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle } from 'lucide-react';
 import Scanner from './components/Scanner';
 import Generator from './components/Generator';
 import CompletionModal from './components/CompletionModal';
@@ -11,7 +11,6 @@ export default function App() {
   const [allowDuplicates, setAllowDuplicates] = useState(true);
   const [isTargetReached, setIsTargetReached] = useState(false);
   const [toast, setToast] = useState(null);
-  const [alertMessage, setAlertMessage] = useState(null); // { text, type: 'success' | 'warning' }
 
   // Real-time synchronization states
   const [sessionId, setSessionId] = useState(() => {
@@ -22,14 +21,10 @@ export default function App() {
   const [lastPhoneScanVal, setLastPhoneScanVal] = useState('');
   const [phoneStatus, setPhoneStatus] = useState('sending'); // 'sending' | 'success' | 'duplicate' | 'complete'
   const [mobileStats, setMobileStats] = useState({ count: 0, limit: 15 });
-  const [showMobileScanPopup, setShowMobileScanPopup] = useState(false);
-  const [mobilePopupStatus, setMobilePopupStatus] = useState('sending');
-  const [mobilePopupPayload, setMobilePopupPayload] = useState('');
 
   // Refs to hold active scan values
   const scanSuccessRef = useRef(null);
   const stateRef = useRef({ targetLimit, scanLog, allowDuplicates, isTargetReached });
-  const mobilePopupPayloadRef = useRef('');
 
 
   // Web Audio Synth for feedback sounds
@@ -87,46 +82,16 @@ export default function App() {
   const handleResetSession = () => {
     setScanLog([]);
     setIsTargetReached(false);
-    setAlertMessage(null); // Clear active alerts
     showToast('Session reset successfully. Ready to scan!', 'info');
     playBeep('success');
-    broadcastState([], targetLimit, false, false, 'RESET');
-  };
-
-  const parseScanUrl = (urlText) => {
-    try {
-      if (urlText.startsWith('http') && urlText.includes('session=') && urlText.includes('scan=')) {
-        const url = new URL(urlText);
-        const session = url.searchParams.get('session');
-        const scan = url.searchParams.get('scan');
-        return { session, scan };
-      }
-    } catch (e) {
-      // Ignore
-    }
-    return null;
   };
 
   // Handle a new successful QR scan
   const handleScanSuccess = (decodedText) => {
-    const parsed = parseScanUrl(decodedText);
-    if (parsed) {
-      const { session, scan } = parsed;
-      const isMobile = /Mobi|Android|iPhone/i.test(navigator.userAgent);
-      
-      if (isMobile) {
-        setMobilePopupPayload(scan);
-        mobilePopupPayloadRef.current = scan;
-        setMobilePopupStatus('sending');
-        setShowMobileScanPopup(true);
-        
-        // Transmit via SSE channel
-        publishScanToChannel(session, scan);
-        return;
-      } else {
-        window.location.href = decodedText;
-        return;
-      }
+    // If the scanned payload is a URL link for our app, redirect the browser to it to register
+    if (decodedText.startsWith('http') && decodedText.includes('session=') && decodedText.includes('scan=')) {
+      window.location.href = decodedText;
+      return;
     }
 
     const { targetLimit, scanLog, allowDuplicates, isTargetReached } = stateRef.current;
@@ -139,13 +104,15 @@ export default function App() {
     if (isDuplicate && !allowDuplicates) {
       playBeep('duplicate');
       showToast(`Ignored duplicate scan: "${decodedText}"`, 'warning');
-      setAlertMessage({
-        text: `Already Scanned: This QR code ("${decodedText}") has already been scanned in this session. Please use a different QR code.`,
-        type: 'warning'
-      });
       
       // Publish state back to SSE topic: duplicate = true
-      broadcastState(scanLog, targetLimit, isTargetReached, true, decodedText);
+      publishState(sessionId, {
+        type: 'STATE',
+        scanCount: scanLog.length,
+        targetLimit,
+        duplicate: true,
+        lastPayload: decodedText
+      });
       return;
     }
 
@@ -167,21 +134,20 @@ export default function App() {
       setIsTargetReached(true);
       playBeep('complete');
       showToast('Scan target limit reached!', 'success');
-      setAlertMessage({
-        text: `Goal Completed: All ${updatedLog.length} of ${targetLimit} scans have been completed successfully!`,
-        type: 'success'
-      });
     } else {
       playBeep('success');
       showToast(`Scan #${updatedLog.length} recorded: "${decodedText}"`, 'success');
-      setAlertMessage({
-        text: `Scanned Successfully: QR code "${decodedText}" has been recorded.`,
-        type: 'success'
-      });
     }
 
     // Publish state back to SSE topic: duplicate = false
-    broadcastState(updatedLog, targetLimit, isLimitHit, false, decodedText);
+    publishState(sessionId, {
+      type: 'STATE',
+      scanCount: updatedLog.length,
+      targetLimit,
+      duplicate: false,
+      lastPayload: decodedText,
+      isComplete: isLimitHit
+    });
   };
 
   // Update ref to hold latest state values and scan success handler
@@ -190,46 +156,28 @@ export default function App() {
     stateRef.current = { targetLimit, scanLog, allowDuplicates, isTargetReached };
   });
 
-  // Helper function to broadcast state to all clients in the room
-  function broadcastState(updatedLog, limit, isComplete, duplicate, lastPayload) {
-    publishState(sessionId, {
-      type: 'STATE',
-      scanLog: updatedLog,
-      targetLimit: limit,
-      isComplete,
-      duplicate,
-      lastPayload
-    });
-  }
-
-  // Helper to publish states to ntfy.ch
+  // Helper to publish states to ntfy.sh
   const publishState = async (sessionRoom, stateObj) => {
     try {
-      const response = await fetch(`https://ntfy.ch/qrcounter_${sessionRoom}`, {
+      await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
         method: 'POST',
         body: JSON.stringify(stateObj)
       });
-      if (response.status === 429) {
-        showToast('Sync rate-limited. Please close other duplicate browser tabs!', 'warning');
-      }
     } catch (err) {
       console.error('Failed to publish state:', err);
     }
   };
 
-  // Publish a scanned payload to ntfy.ch (triggered from the phone scanner client)
+  // Publish a scanned payload to ntfy.sh (triggered from the phone scanner client)
   const publishScanToChannel = async (sessionRoom, payload) => {
     try {
-      const response = await fetch(`https://ntfy.ch/qrcounter_${sessionRoom}`, {
+      await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
         method: 'POST',
         body: JSON.stringify({
           type: 'SCAN',
           payload
         })
       });
-      if (response.status === 429) {
-        showToast('Sync rate-limited. Please close other duplicate browser tabs!', 'warning');
-      }
     } catch (err) {
       console.error('Failed to publish scan to channel:', err);
       showToast('Sync server offline', 'warning');
@@ -251,39 +199,30 @@ export default function App() {
       setPhoneStatus('sending');
 
       // Connect to computer session's SSE topic to receive state feedback
-      const topicUrl = `https://ntfy.ch/qrcounter_${sessionParam}/sse`;
+      const topicUrl = `https://ntfy.sh/qrcounter_${sessionParam}/sse`;
       const eventSource = new EventSource(topicUrl);
 
       eventSource.onmessage = (event) => {
         try {
-          if (!event.data) return;
           const data = JSON.parse(event.data);
-          if (data.event !== 'message') return;
+          const msgObj = JSON.parse(data.message);
           
-          try {
-            const msgObj = JSON.parse(data.message);
-            if (msgObj.type === 'STATE') {
-              const isPayloadInLog = msgObj.scanLog && msgObj.scanLog.some(item => item.payload === scanPayload);
-              if (isPayloadInLog || msgObj.lastPayload === scanPayload) {
-                setMobileStats({
-                  count: msgObj.scanLog ? msgObj.scanLog.length : 0,
-                  limit: msgObj.targetLimit
-                });
-                
-                if (msgObj.isComplete) {
-                  setPhoneStatus('complete');
-                } else if (msgObj.duplicate) {
-                  setPhoneStatus('duplicate');
-                } else {
-                  setPhoneStatus('success');
-                }
-              }
+          if (msgObj.type === 'STATE' && msgObj.lastPayload === scanPayload) {
+            setMobileStats({
+              count: msgObj.scanCount,
+              limit: msgObj.targetLimit
+            });
+            
+            if (msgObj.isComplete) {
+              setPhoneStatus('complete');
+            } else if (msgObj.duplicate) {
+              setPhoneStatus('duplicate');
+            } else {
+              setPhoneStatus('success');
             }
-          } catch (e) {
-            // Not a STATE JSON, ignore
           }
         } catch (err) {
-          console.error('Error in mobile SSE message parser:', err);
+          // Ignore other message formats
         }
       };
 
@@ -310,124 +249,26 @@ export default function App() {
       const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
       window.history.replaceState({}, document.title, cleanUrl);
 
-      // Listen for incoming mobile scans via ntfy.ch SSE stream
-      const topicUrl = `https://ntfy.ch/qrcounter_${sessionId}/sse`;
+      // Listen for incoming mobile scans via ntfy.sh SSE stream
+      const topicUrl = `https://ntfy.sh/qrcounter_${sessionId}/sse`;
       const eventSource = new EventSource(topicUrl);
 
       eventSource.onmessage = (event) => {
         try {
-          if (!event.data) return;
           const data = JSON.parse(event.data);
+          const msgObj = JSON.parse(data.message);
           
-          // Only process message events, ignore ntfy keepalives/etc
-          if (data.event !== 'message') return;
-          
-          const messageStr = data.message;
-          if (!messageStr) return;
-
-          try {
-            const msgObj = JSON.parse(messageStr);
-            
-            // 1. If it's a SCAN request, only the Desktop client processes it
-            if (msgObj.type === 'SCAN' && msgObj.payload) {
-              const isDesktop = !/Mobi|Android|iPhone/i.test(navigator.userAgent);
-              if (isDesktop && scanSuccessRef.current) {
-                scanSuccessRef.current(msgObj.payload);
-              }
-            }
-            
-            // 2. If it's a STATE update, synchronise the dashboard view on mobile/other clients
-            if (msgObj.type === 'STATE') {
-              const currentLocalLog = stateRef.current.scanLog;
-              const incomingLogLength = msgObj.scanLog ? msgObj.scanLog.length : 0;
-              
-              // Synchronize popup status for mobile scanner overlay
-              if (mobilePopupPayloadRef.current) {
-                const targetPayload = mobilePopupPayloadRef.current;
-                const isPayloadInLog = msgObj.scanLog && msgObj.scanLog.some(item => item.payload === targetPayload);
-                if (isPayloadInLog || msgObj.lastPayload === targetPayload) {
-                  if (msgObj.duplicate) {
-                    setMobilePopupStatus('duplicate');
-                  } else if (msgObj.isComplete) {
-                    setMobilePopupStatus('complete');
-                  } else {
-                    setMobilePopupStatus('success');
-                  }
-                  // Clear ref to prevent duplicate processing
-                  mobilePopupPayloadRef.current = '';
-                }
-              }
-              
-              if (incomingLogLength !== currentLocalLog.length || msgObj.targetLimit !== stateRef.current.targetLimit) {
-                // Play notification beeps locally if a new scan was registered by someone else
-                if (incomingLogLength > currentLocalLog.length && msgObj.lastPayload !== 'LIMIT_CHANGE' && msgObj.lastPayload !== 'RESET' && msgObj.lastPayload !== 'SYNC_RESPONSE') {
-                  if (msgObj.isComplete) {
-                    playBeep('complete');
-                    showToast('Scan target limit reached!', 'success');
-                  } else {
-                    playBeep('success');
-                    showToast(`Scan #${incomingLogLength} recorded: "${msgObj.lastPayload}"`, 'success');
-                  }
-                }
-                
-                // Update local states
-                if (msgObj.scanLog) setScanLog(msgObj.scanLog);
-                if (msgObj.targetLimit) setTargetLimit(msgObj.targetLimit);
-                setIsTargetReached(!!msgObj.isComplete);
-                
-                // Set dismissible alert banners locally
-                if (msgObj.lastPayload === 'RESET') {
-                  setAlertMessage(null);
-                } else if (msgObj.lastPayload === 'LIMIT_CHANGE' || msgObj.lastPayload === 'SYNC_RESPONSE') {
-                  // Ignore for alerts
-                } else if (msgObj.duplicate) {
-                  setAlertMessage({
-                    text: `Already Scanned: This QR code ("${msgObj.lastPayload}") has already been scanned in this session. Please use a different QR code.`,
-                    type: 'warning'
-                  });
-                } else {
-                  setAlertMessage({
-                    text: `Scanned Successfully: QR code "${msgObj.lastPayload}" has been recorded.`,
-                    type: 'success'
-                  });
-                }
-              }
-            }
-
-            // 3. If it's a SYNC_REQUEST, the master (Desktop) client broadcasts the current state
-            if (msgObj.type === 'SYNC_REQUEST') {
-              const isDesktop = !/Mobi|Android|iPhone/i.test(navigator.userAgent);
-              const currentLog = stateRef.current.scanLog;
-              if (isDesktop && currentLog.length > 0) {
-                broadcastState(currentLog, stateRef.current.targetLimit, stateRef.current.isTargetReached, false, 'SYNC_RESPONSE');
-              }
-            }
-          } catch (e) {
-            // Fallback: If payload is raw text, only desktop processes it
-            const isDesktop = !/Mobi|Android|iPhone/i.test(navigator.userAgent);
-            if (isDesktop && scanSuccessRef.current) {
-              scanSuccessRef.current(messageStr);
-            }
+          if (msgObj.type === 'SCAN' && msgObj.payload) {
+            handleScanSuccess(msgObj.payload);
           }
         } catch (err) {
-          console.error('Error in computer SSE message parser:', err);
+          // Fallback support for raw text payloads (e.g. older versions)
+          const data = JSON.parse(event.data);
+          if (data.message) {
+            handleScanSuccess(data.message);
+          }
         }
       };
-
-      // Send a sync request to fetch active room data from the laptop if it is already running
-      const requestSync = async () => {
-        try {
-          await fetch(`https://ntfy.ch/qrcounter_${sessionId}`, {
-            method: 'POST',
-            body: JSON.stringify({ type: 'SYNC_REQUEST' })
-          });
-        } catch (err) {
-          console.error('Failed to send sync request', err);
-        }
-      };
-
-      // Delay slightly to ensure EventSource listeners are ready on all ends
-      setTimeout(requestSync, 1000);
 
       return () => {
         eventSource.close();
@@ -514,7 +355,7 @@ export default function App() {
               <AlertTriangle size={56} style={{ color: 'var(--warning)', marginBottom: '0.25rem' }} />
               <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--warning)' }}>Already Scanned!</h2>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
-                This QR code (<strong>{lastPhoneScanVal}</strong>) has already been scanned. Please try scanning a different QR code!
+                QR code <strong>{lastPhoneScanVal}</strong> has already been scanned in this session.
               </p>
               <div className="modal-stats" style={{ margin: '0.5rem 0', width: '100%' }}>
                 <div className="stat-box">
@@ -540,26 +381,11 @@ export default function App() {
             </>
           )}
 
-          {(phoneStatus === 'success' || phoneStatus === 'duplicate' || phoneStatus === 'complete') && (
-            <button 
-              className="btn btn-secondary" 
-              onClick={() => {
-                setIsPhoneScanSuccess(false);
-                setPhoneStatus('sending');
-                window.history.replaceState({}, document.title, `${window.location.origin}${window.location.pathname}?session=${sessionId}`);
-              }}
-              style={{ width: '100%', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
-            >
-              <Camera size={16} />
-              Scan Another QR
-            </button>
-          )}
-
-          <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', fontWeight: '600', border: '1px solid var(--border-color)', marginTop: '0.25rem' }}>
+          <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', fontWeight: '600', border: '1px solid var(--border-color)', marginTop: '0.5rem' }}>
             Session Room: {sessionId}
           </div>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            You can close this browser tab now.
+            You can close this browser tab now or scan another code.
           </p>
         </div>
       </div>
@@ -586,34 +412,6 @@ export default function App() {
           </span>
         </div>
       </header>
-
-      {/* Main Alert Message Banner (Top of computer view) */}
-      {alertMessage && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.75rem',
-          padding: '1rem',
-          borderRadius: 'var(--radius-md)',
-          border: '1px solid',
-          background: alertMessage.type === 'success' ? '#e6fdf4' : alertMessage.type === 'warning' ? '#fffbeb' : '#fef2f2',
-          borderColor: alertMessage.type === 'success' ? '#a7f3d0' : alertMessage.type === 'warning' ? '#fde68a' : '#fca5a5',
-          color: alertMessage.type === 'success' ? '#065f46' : alertMessage.type === 'warning' ? '#92400e' : '#991b1b',
-          fontSize: '0.9rem',
-          fontWeight: 500,
-          boxShadow: 'var(--shadow-sm)',
-          animation: 'slideUp 0.2s ease-out'
-        }}>
-          {alertMessage.type === 'success' ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}
-          <div style={{ flex: 1 }}>{alertMessage.text}</div>
-          <button 
-            onClick={() => setAlertMessage(null)}
-            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'inherit', fontWeight: 'bold', fontSize: '1.25rem', padding: '0 0.5rem', lineHeight: 1 }}
-          >
-            ×
-          </button>
-        </div>
-      )}
 
       {/* Main Grid */}
       <div className="dashboard-grid">
@@ -659,14 +457,13 @@ export default function App() {
                 onChange={(e) => {
                   const val = parseInt(e.target.value) || 1;
                   setTargetLimit(val);
-                  const isComplete = scanLog.length >= val;
-                  if (isComplete) {
+                  // Dynamic checks in case limit is decreased under current scan log length
+                  if (scanLog.length >= val) {
                     setIsTargetReached(true);
                     playBeep('complete');
                   } else {
                     setIsTargetReached(false);
                   }
-                  broadcastState(scanLog, val, isComplete, false, 'LIMIT_CHANGE');
                 }}
                 disabled={isTargetReached}
               />
@@ -678,18 +475,7 @@ export default function App() {
                 <input
                   type="checkbox"
                   checked={allowDuplicates}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setAllowDuplicates(checked);
-                    publishState(sessionId, {
-                      type: 'STATE',
-                      scanLog,
-                      targetLimit,
-                      isComplete: isTargetReached,
-                      duplicate: false,
-                      lastPayload: 'CONFIG_CHANGE'
-                    });
-                  }}
+                  onChange={(e) => setAllowDuplicates(e.target.checked)}
                 />
                 <span className="slider"></span>
               </label>
@@ -813,104 +599,6 @@ export default function App() {
           {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: 'var(--warning)' }} />}
           {toast.type === 'info' && <Info size={18} style={{ color: 'var(--secondary)' }} />}
           <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{toast.message}</span>
-        </div>
-      )}
-
-      {/* Mobile Scanner Overlay Popup Modal */}
-      {showMobileScanPopup && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 10000,
-          padding: '1.5rem'
-        }}>
-          <div className="card text-center" style={{
-            maxWidth: '360px',
-            width: '100%',
-            background: 'var(--bg-primary)',
-            padding: '2rem 1.5rem',
-            borderRadius: 'var(--radius-lg)',
-            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '1.25rem',
-            position: 'relative'
-          }}>
-            {/* Top-Right Dismiss Button */}
-            <button 
-              onClick={() => setShowMobileScanPopup(false)}
-              style={{
-                position: 'absolute',
-                top: '0.75rem',
-                right: '0.75rem',
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                fontSize: '1.5rem',
-                color: 'var(--text-muted)',
-                fontWeight: 'bold',
-                lineHeight: 1,
-                padding: '0.25rem'
-              }}
-            >
-              &times;
-            </button>
-
-            {mobilePopupStatus === 'sending' && (
-              <>
-                <RefreshCw className="animate-spin" size={48} style={{ color: 'var(--secondary)' }} />
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Transmitting Scan...</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                  Registering scan payload <strong>{mobilePopupPayload}</strong>...
-                </p>
-              </>
-            )}
-
-            {mobilePopupStatus === 'success' && (
-              <>
-                <CheckCircle2 size={48} style={{ color: 'var(--primary)' }} />
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>Scan Successful!</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '1rem', fontWeight: 600, marginTop: '-0.25rem' }}>
-                  Counter Updated
-                </p>
-              </>
-            )}
-
-            {mobilePopupStatus === 'duplicate' && (
-              <>
-                <AlertTriangle size={48} style={{ color: 'var(--warning)' }} />
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--warning)' }}>Already Scanned!</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.4' }}>
-                  This QR code (<strong>{mobilePopupPayload}</strong>) has already been scanned. Please scan a different code!
-                </p>
-              </>
-            )}
-
-            {mobilePopupStatus === 'complete' && (
-              <>
-                <CheckCircle2 size={48} style={{ color: 'var(--primary)' }} />
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>Limit Reached!</h3>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.4' }}>
-                  Target scan limit has been completed successfully!
-                </p>
-              </>
-            )}
-
-            {mobilePopupStatus !== 'sending' && (
-              <button
-                className="btn btn-secondary"
-                onClick={() => setShowMobileScanPopup(false)}
-                style={{ width: '100%', marginTop: '0.5rem' }}
-              >
-                Close Scanner
-              </button>
-            )}
-          </div>
         </div>
       )}
     </div>
