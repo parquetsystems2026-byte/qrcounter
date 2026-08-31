@@ -333,13 +333,19 @@ export default function App() {
               const incomingLogLength = msgObj.scanLog ? msgObj.scanLog.length : 0;
               
               // Synchronize popup status for mobile scanner overlay
-              if (msgObj.lastPayload === mobilePopupPayloadRef.current) {
-                if (msgObj.isComplete) {
-                  setMobilePopupStatus('complete');
-                } else if (msgObj.duplicate) {
-                  setMobilePopupStatus('duplicate');
-                } else {
-                  setMobilePopupStatus('success');
+              if (mobilePopupPayloadRef.current) {
+                const targetPayload = mobilePopupPayloadRef.current;
+                const isPayloadInLog = msgObj.scanLog && msgObj.scanLog.some(item => item.payload === targetPayload);
+                if (isPayloadInLog || msgObj.lastPayload === targetPayload) {
+                  if (msgObj.duplicate) {
+                    setMobilePopupStatus('duplicate');
+                  } else if (msgObj.isComplete) {
+                    setMobilePopupStatus('complete');
+                  } else {
+                    setMobilePopupStatus('success');
+                  }
+                  // Clear ref to prevent duplicate processing
+                  mobilePopupPayloadRef.current = '';
                 }
               }
               
