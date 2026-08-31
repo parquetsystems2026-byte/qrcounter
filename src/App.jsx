@@ -22,10 +22,14 @@ export default function App() {
   const [lastPhoneScanVal, setLastPhoneScanVal] = useState('');
   const [phoneStatus, setPhoneStatus] = useState('sending'); // 'sending' | 'success' | 'duplicate' | 'complete'
   const [mobileStats, setMobileStats] = useState({ count: 0, limit: 15 });
+  const [showMobileScanPopup, setShowMobileScanPopup] = useState(false);
+  const [mobilePopupStatus, setMobilePopupStatus] = useState('sending');
+  const [mobilePopupPayload, setMobilePopupPayload] = useState('');
 
   // Refs to hold active scan values
   const scanSuccessRef = useRef(null);
   const stateRef = useRef({ targetLimit, scanLog, allowDuplicates, isTargetReached });
+  const mobilePopupPayloadRef = useRef('');
 
 
   // Web Audio Synth for feedback sounds
@@ -89,12 +93,40 @@ export default function App() {
     broadcastState([], targetLimit, false, false, 'RESET');
   };
 
+  const parseScanUrl = (urlText) => {
+    try {
+      if (urlText.startsWith('http') && urlText.includes('session=') && urlText.includes('scan=')) {
+        const url = new URL(urlText);
+        const session = url.searchParams.get('session');
+        const scan = url.searchParams.get('scan');
+        return { session, scan };
+      }
+    } catch (e) {
+      // Ignore
+    }
+    return null;
+  };
+
   // Handle a new successful QR scan
   const handleScanSuccess = (decodedText) => {
-    // If the scanned payload is a URL link for our app, redirect the browser to it to register
-    if (decodedText.startsWith('http') && decodedText.includes('session=') && decodedText.includes('scan=')) {
-      window.location.href = decodedText;
-      return;
+    const parsed = parseScanUrl(decodedText);
+    if (parsed) {
+      const { session, scan } = parsed;
+      const isMobile = /Mobi|Android|iPhone/i.test(navigator.userAgent);
+      
+      if (isMobile) {
+        setMobilePopupPayload(scan);
+        mobilePopupPayloadRef.current = scan;
+        setMobilePopupStatus('sending');
+        setShowMobileScanPopup(true);
+        
+        // Transmit via SSE channel
+        publishScanToChannel(session, scan);
+        return;
+      } else {
+        window.location.href = decodedText;
+        return;
+      }
     }
 
     const { targetLimit, scanLog, allowDuplicates, isTargetReached } = stateRef.current;
@@ -299,6 +331,17 @@ export default function App() {
             if (msgObj.type === 'STATE') {
               const currentLocalLog = stateRef.current.scanLog;
               const incomingLogLength = msgObj.scanLog ? msgObj.scanLog.length : 0;
+              
+              // Synchronize popup status for mobile scanner overlay
+              if (msgObj.lastPayload === mobilePopupPayloadRef.current) {
+                if (msgObj.isComplete) {
+                  setMobilePopupStatus('complete');
+                } else if (msgObj.duplicate) {
+                  setMobilePopupStatus('duplicate');
+                } else {
+                  setMobilePopupStatus('success');
+                }
+              }
               
               if (incomingLogLength !== currentLocalLog.length || msgObj.targetLimit !== stateRef.current.targetLimit) {
                 // Play notification beeps locally if a new scan was registered by someone else
@@ -755,6 +798,83 @@ export default function App() {
           {toast.type === 'warning' && <AlertTriangle size={18} style={{ color: 'var(--warning)' }} />}
           {toast.type === 'info' && <Info size={18} style={{ color: 'var(--secondary)' }} />}
           <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{toast.message}</span>
+        </div>
+      )}
+
+      {/* Mobile Scanner Overlay Popup Modal */}
+      {showMobileScanPopup && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10000,
+          padding: '1.5rem'
+        }}>
+          <div className="card text-center" style={{
+            maxWidth: '360px',
+            width: '100%',
+            background: 'var(--bg-primary)',
+            padding: '2rem 1.5rem',
+            borderRadius: 'var(--radius-lg)',
+            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '1.25rem'
+          }}>
+            {mobilePopupStatus === 'sending' && (
+              <>
+                <RefreshCw className="animate-spin" size={48} style={{ color: 'var(--secondary)' }} />
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Transmitting Scan...</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                  Registering <strong>{mobilePopupPayload}</strong> on the laptop dashboard...
+                </p>
+              </>
+            )}
+
+            {mobilePopupStatus === 'success' && (
+              <>
+                <CheckCircle2 size={48} style={{ color: 'var(--primary)' }} />
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>Scanned Successfully!</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.4' }}>
+                  QR code <strong>{mobilePopupPayload}</strong> has been registered on the dashboard.
+                </p>
+              </>
+            )}
+
+            {mobilePopupStatus === 'duplicate' && (
+              <>
+                <AlertTriangle size={48} style={{ color: 'var(--warning)' }} />
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--warning)' }}>Already Scanned!</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.4' }}>
+                  This QR code (<strong>{mobilePopupPayload}</strong>) has already been scanned. Please scan a different code!
+                </p>
+              </>
+            )}
+
+            {mobilePopupStatus === 'complete' && (
+              <>
+                <CheckCircle2 size={48} style={{ color: 'var(--primary)' }} />
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>Limit Reached!</h3>
+                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.4' }}>
+                  Target scan limit has been completed successfully!
+                </p>
+              </>
+            )}
+
+            {mobilePopupStatus !== 'sending' && (
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowMobileScanPopup(false)}
+                style={{ width: '100%', marginTop: '0.5rem' }}
+              >
+                Close Scanner
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
