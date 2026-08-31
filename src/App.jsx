@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle } from 'lucide-react';
+import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle, Camera } from 'lucide-react';
 import Scanner from './components/Scanner';
 import Generator from './components/Generator';
 import CompletionModal from './components/CompletionModal';
@@ -11,6 +11,7 @@ export default function App() {
   const [allowDuplicates, setAllowDuplicates] = useState(false);
   const [isTargetReached, setIsTargetReached] = useState(false);
   const [toast, setToast] = useState(null);
+  const [alertMessage, setAlertMessage] = useState(null); // { text, type: 'success' | 'warning' }
 
   // Real-time synchronization states
   const [sessionId, setSessionId] = useState(() => {
@@ -82,6 +83,7 @@ export default function App() {
   const handleResetSession = () => {
     setScanLog([]);
     setIsTargetReached(false);
+    setAlertMessage(null); // Clear active alerts
     showToast('Session reset successfully. Ready to scan!', 'info');
     playBeep('success');
   };
@@ -104,6 +106,10 @@ export default function App() {
     if (isDuplicate && !allowDuplicates) {
       playBeep('duplicate');
       showToast(`Ignored duplicate scan: "${decodedText}"`, 'warning');
+      setAlertMessage({
+        text: `Already Scanned: This QR code ("${decodedText}") has already been scanned in this session. Please use a different QR code.`,
+        type: 'warning'
+      });
       
       // Publish state back to SSE topic: duplicate = true
       publishState(sessionId, {
@@ -134,9 +140,17 @@ export default function App() {
       setIsTargetReached(true);
       playBeep('complete');
       showToast('Scan target limit reached!', 'success');
+      setAlertMessage({
+        text: `Goal Completed: All ${updatedLog.length} of ${targetLimit} scans have been completed successfully!`,
+        type: 'success'
+      });
     } else {
       playBeep('success');
       showToast(`Scan #${updatedLog.length} recorded: "${decodedText}"`, 'success');
+      setAlertMessage({
+        text: `Scanned Successfully: QR code "${decodedText}" has been recorded.`,
+        type: 'success'
+      });
     }
 
     // Publish state back to SSE topic: duplicate = false
@@ -204,25 +218,31 @@ export default function App() {
 
       eventSource.onmessage = (event) => {
         try {
+          if (!event.data) return;
           const data = JSON.parse(event.data);
-          const msgObj = JSON.parse(data.message);
+          if (data.event !== 'message') return;
           
-          if (msgObj.type === 'STATE' && msgObj.lastPayload === scanPayload) {
-            setMobileStats({
-              count: msgObj.scanCount,
-              limit: msgObj.targetLimit
-            });
-            
-            if (msgObj.isComplete) {
-              setPhoneStatus('complete');
-            } else if (msgObj.duplicate) {
-              setPhoneStatus('duplicate');
-            } else {
-              setPhoneStatus('success');
+          try {
+            const msgObj = JSON.parse(data.message);
+            if (msgObj.type === 'STATE' && msgObj.lastPayload === scanPayload) {
+              setMobileStats({
+                count: msgObj.scanCount,
+                limit: msgObj.targetLimit
+              });
+              
+              if (msgObj.isComplete) {
+                setPhoneStatus('complete');
+              } else if (msgObj.duplicate) {
+                setPhoneStatus('duplicate');
+              } else {
+                setPhoneStatus('success');
+              }
             }
+          } catch (e) {
+            // Not a STATE JSON, ignore
           }
         } catch (err) {
-          // Ignore other message formats
+          console.error('Error in mobile SSE message parser:', err);
         }
       };
 
@@ -255,18 +275,30 @@ export default function App() {
 
       eventSource.onmessage = (event) => {
         try {
+          if (!event.data) return;
           const data = JSON.parse(event.data);
-          const msgObj = JSON.parse(data.message);
           
-          if (msgObj.type === 'SCAN' && msgObj.payload) {
-            handleScanSuccess(msgObj.payload);
+          // Only process message events, ignore ntfy keepalives/etc
+          if (data.event !== 'message') return;
+          
+          const messageStr = data.message;
+          if (!messageStr) return;
+
+          try {
+            const msgObj = JSON.parse(messageStr);
+            if (msgObj.type === 'SCAN' && msgObj.payload) {
+              if (scanSuccessRef.current) {
+                scanSuccessRef.current(msgObj.payload);
+              }
+            }
+          } catch (e) {
+            // Fallback: If payload is raw text (e.g. older versions), run directly
+            if (scanSuccessRef.current) {
+              scanSuccessRef.current(messageStr);
+            }
           }
         } catch (err) {
-          // Fallback support for raw text payloads (e.g. older versions)
-          const data = JSON.parse(event.data);
-          if (data.message) {
-            handleScanSuccess(data.message);
-          }
+          console.error('Error in computer SSE message parser:', err);
         }
       };
 
@@ -355,7 +387,7 @@ export default function App() {
               <AlertTriangle size={56} style={{ color: 'var(--warning)', marginBottom: '0.25rem' }} />
               <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--warning)' }}>Already Scanned!</h2>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
-                QR code <strong>{lastPhoneScanVal}</strong> has already been scanned in this session.
+                This QR code (<strong>{lastPhoneScanVal}</strong>) has already been scanned. Please try scanning a different QR code!
               </p>
               <div className="modal-stats" style={{ margin: '0.5rem 0', width: '100%' }}>
                 <div className="stat-box">
@@ -381,11 +413,26 @@ export default function App() {
             </>
           )}
 
-          <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', fontWeight: '600', border: '1px solid var(--border-color)', marginTop: '0.5rem' }}>
+          {(phoneStatus === 'success' || phoneStatus === 'duplicate' || phoneStatus === 'complete') && (
+            <button 
+              className="btn btn-secondary" 
+              onClick={() => {
+                setIsPhoneScanSuccess(false);
+                setPhoneStatus('sending');
+                window.history.replaceState({}, document.title, `${window.location.origin}${window.location.pathname}?session=${sessionId}`);
+              }}
+              style={{ width: '100%', marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+            >
+              <Camera size={16} />
+              Scan Another QR
+            </button>
+          )}
+
+          <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', fontWeight: '600', border: '1px solid var(--border-color)', marginTop: '0.25rem' }}>
             Session Room: {sessionId}
           </div>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            You can close this browser tab now or scan another code.
+            You can close this browser tab now.
           </p>
         </div>
       </div>
@@ -412,6 +459,34 @@ export default function App() {
           </span>
         </div>
       </header>
+
+      {/* Main Alert Message Banner (Top of computer view) */}
+      {alertMessage && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.75rem',
+          padding: '1rem',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid',
+          background: alertMessage.type === 'success' ? '#e6fdf4' : alertMessage.type === 'warning' ? '#fffbeb' : '#fef2f2',
+          borderColor: alertMessage.type === 'success' ? '#a7f3d0' : alertMessage.type === 'warning' ? '#fde68a' : '#fca5a5',
+          color: alertMessage.type === 'success' ? '#065f46' : alertMessage.type === 'warning' ? '#92400e' : '#991b1b',
+          fontSize: '0.9rem',
+          fontWeight: 500,
+          boxShadow: 'var(--shadow-sm)',
+          animation: 'slideUp 0.2s ease-out'
+        }}>
+          {alertMessage.type === 'success' ? <CheckCircle2 size={20} /> : <AlertTriangle size={20} />}
+          <div style={{ flex: 1 }}>{alertMessage.text}</div>
+          <button 
+            onClick={() => setAlertMessage(null)}
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'inherit', fontWeight: 'bold', fontSize: '1.25rem', padding: '0 0.5rem', lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Main Grid */}
       <div className="dashboard-grid">
@@ -533,12 +608,12 @@ export default function App() {
             <ClipboardList style={{ color: 'var(--primary)' }} size={22} />
             <h2>Scan Registry Log</h2>
           </div>
-          {scanLog.length > 0 && (
+          {/* {scanLog.length > 0 && (
             <button className="btn btn-secondary" onClick={handleExportLog} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
               <FileText size={14} />
               Export log
             </button>
-          )}
+          )} */}
         </div>
 
         {scanLog.length === 0 ? (
