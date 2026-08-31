@@ -88,6 +88,12 @@ export default function App() {
 
   // Handle a new successful QR scan
   const handleScanSuccess = (decodedText) => {
+    // If the scanned payload is a URL link for our app, redirect the browser to it to register
+    if (decodedText.startsWith('http') && decodedText.includes('session=') && decodedText.includes('scan=')) {
+      window.location.href = decodedText;
+      return;
+    }
+
     const { targetLimit, scanLog, allowDuplicates, isTargetReached } = stateRef.current;
 
     if (isTargetReached) return;
