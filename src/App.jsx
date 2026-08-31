@@ -107,6 +107,22 @@ export default function App() {
     }
   };
 
+  // Listen for ?scan=... parameter in browser URL (for generic phone camera scanning)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const scanPayload = params.get('scan');
+    if (scanPayload) {
+      // Small timeout to let app finish loading state/sounds
+      setTimeout(() => {
+        handleScanSuccess(scanPayload);
+      }, 500);
+      
+      // Clean query parameter from URL bar to prevent duplicate registers on refresh
+      const cleanUrl = window.location.origin + window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  }, []);
+
   const handleScanFailure = (errorMsg) => {
     // Standard fail log
   };

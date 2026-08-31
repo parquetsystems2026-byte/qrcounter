@@ -61,7 +61,7 @@ export default function Generator({ onSimulateScan, isDisabled }) {
         <div className="qr-canvas-container">
           <QRCodeSVG
             id="generated-qr"
-            value={qrId || ' '}
+            value={qrId ? `${window.location.origin}/?scan=${encodeURIComponent(qrId)}` : ' '}
             size={180}
             level="H"
             includeMargin={true}
