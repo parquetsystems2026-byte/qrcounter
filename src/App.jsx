@@ -302,7 +302,7 @@ export default function App() {
               
               if (incomingLogLength !== currentLocalLog.length || msgObj.targetLimit !== stateRef.current.targetLimit) {
                 // Play notification beeps locally if a new scan was registered by someone else
-                if (incomingLogLength > currentLocalLog.length && msgObj.lastPayload !== 'LIMIT_CHANGE' && msgObj.lastPayload !== 'RESET') {
+                if (incomingLogLength > currentLocalLog.length && msgObj.lastPayload !== 'LIMIT_CHANGE' && msgObj.lastPayload !== 'RESET' && msgObj.lastPayload !== 'SYNC_RESPONSE') {
                   if (msgObj.isComplete) {
                     playBeep('complete');
                     showToast('Scan target limit reached!', 'success');
@@ -320,8 +320,8 @@ export default function App() {
                 // Set dismissible alert banners locally
                 if (msgObj.lastPayload === 'RESET') {
                   setAlertMessage(null);
-                } else if (msgObj.lastPayload === 'LIMIT_CHANGE') {
-                  // Ignore limit changes for alerts
+                } else if (msgObj.lastPayload === 'LIMIT_CHANGE' || msgObj.lastPayload === 'SYNC_RESPONSE') {
+                  // Ignore for alerts
                 } else if (msgObj.duplicate) {
                   setAlertMessage({
                     text: `Already Scanned: This QR code ("${msgObj.lastPayload}") has already been scanned in this session. Please use a different QR code.`,
@@ -335,6 +335,15 @@ export default function App() {
                 }
               }
             }
+
+            // 3. If it's a SYNC_REQUEST, the master (Desktop) client broadcasts the current state
+            if (msgObj.type === 'SYNC_REQUEST') {
+              const isDesktop = !/Mobi|Android|iPhone/i.test(navigator.userAgent);
+              const currentLog = stateRef.current.scanLog;
+              if (isDesktop && currentLog.length > 0) {
+                broadcastState(currentLog, stateRef.current.targetLimit, stateRef.current.isTargetReached, false, 'SYNC_RESPONSE');
+              }
+            }
           } catch (e) {
             // Fallback: If payload is raw text, only desktop processes it
             const isDesktop = !/Mobi|Android|iPhone/i.test(navigator.userAgent);
@@ -346,6 +355,21 @@ export default function App() {
           console.error('Error in computer SSE message parser:', err);
         }
       };
+
+      // Send a sync request to fetch active room data from the laptop if it is already running
+      const requestSync = async () => {
+        try {
+          await fetch(`https://ntfy.sh/qrcounter_${sessionId}`, {
+            method: 'POST',
+            body: JSON.stringify({ type: 'SYNC_REQUEST' })
+          });
+        } catch (err) {
+          console.error('Failed to send sync request', err);
+        }
+      };
+
+      // Delay slightly to ensure EventSource listeners are ready on all ends
+      setTimeout(requestSync, 1000);
 
       return () => {
         eventSource.close();
@@ -577,13 +601,14 @@ export default function App() {
                 onChange={(e) => {
                   const val = parseInt(e.target.value) || 1;
                   setTargetLimit(val);
-                  // Dynamic checks in case limit is decreased under current scan log length
-                  if (scanLog.length >= val) {
+                  const isComplete = scanLog.length >= val;
+                  if (isComplete) {
                     setIsTargetReached(true);
                     playBeep('complete');
                   } else {
                     setIsTargetReached(false);
                   }
+                  broadcastState(scanLog, val, isComplete, false, 'LIMIT_CHANGE');
                 }}
                 disabled={isTargetReached}
               />
@@ -595,7 +620,18 @@ export default function App() {
                 <input
                   type="checkbox"
                   checked={allowDuplicates}
-                  onChange={(e) => setAllowDuplicates(e.target.checked)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setAllowDuplicates(checked);
+                    publishState(sessionId, {
+                      type: 'STATE',
+                      scanLog,
+                      targetLimit,
+                      isComplete: isTargetReached,
+                      duplicate: false,
+                      lastPayload: 'CONFIG_CHANGE'
+                    });
+                  }}
                 />
                 <span className="slider"></span>
               </label>
