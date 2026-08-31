@@ -21,11 +21,16 @@ export default function App() {
   const [lastPhoneScanVal, setLastPhoneScanVal] = useState('');
   const [phoneStatus, setPhoneStatus] = useState('sending'); // 'sending' | 'success' | 'duplicate' | 'complete'
   const [mobileStats, setMobileStats] = useState({ count: 0, limit: 15 });
-  const [activeAlert, setActiveAlert] = useState(null); // null or { title, text, type: 'success' | 'warning' | 'loading' }
+  const [activeAlert, setActiveAlert] = useState(null); // null or { title, text, type: 'success' | 'warning' | 'loading', scanCount, targetLimit }
+  const [isScanningAllowed, setIsScanningAllowed] = useState(true);
+  const isScanningAllowedRef = useRef(true);
+  useEffect(() => {
+    isScanningAllowedRef.current = isScanningAllowed;
+  }, [isScanningAllowed]);
 
   // Refs to hold active scan values
   const scanSuccessRef = useRef(null);
-  const stateRef = useRef({ targetLimit, scanLog, allowDuplicates, isTargetReached });
+  const stateRef = useRef({ targetLimit, scanLog, allowDuplicates, isTargetReached, isScanningAllowed });
 
 
   // Web Audio Synth for feedback sounds
@@ -83,12 +88,17 @@ export default function App() {
   const handleResetSession = () => {
     setScanLog([]);
     setIsTargetReached(false);
+    setIsScanningAllowed(true);
+    setActiveAlert(null);
     showToast('Session reset successfully. Ready to scan!', 'info');
     playBeep('success');
   };
 
   // Handle a new successful QR scan
   const handleScanSuccess = (decodedText) => {
+    // If scanning is paused, ignore incoming frame decodes
+    if (!isScanningAllowedRef.current) return;
+
     // If the scanned payload is a URL link for our app, redirect the browser to it to register
     if (decodedText.startsWith('http') && decodedText.includes('session=') && decodedText.includes('scan=')) {
       window.location.href = decodedText;
@@ -99,6 +109,9 @@ export default function App() {
 
     if (isTargetReached) return;
 
+    // Pause scanning immediately so we wait for the user to review the popup and click OK
+    setIsScanningAllowed(false);
+
     // Check if duplicate scan
     const isDuplicate = scanLog.some((item) => item.payload === decodedText);
 
@@ -106,6 +119,15 @@ export default function App() {
       playBeep('duplicate');
       showToast(`Ignored duplicate scan: "${decodedText}"`, 'warning');
       
+      // Show warning popup
+      setActiveAlert({
+        title: 'Already Scanned!',
+        text: `The QR code "${decodedText}" has already been scanned in this session.`,
+        type: 'warning',
+        scanCount: scanLog.length,
+        targetLimit
+      });
+
       // Publish state back to SSE topic: duplicate = true
       publishState(sessionId, {
         type: 'STATE',
@@ -135,9 +157,25 @@ export default function App() {
       setIsTargetReached(true);
       playBeep('complete');
       showToast('Scan target limit reached!', 'success');
+      
+      setActiveAlert({
+        title: 'Limit Reached!',
+        text: `Goal completed! All ${updatedLog.length} of ${targetLimit} scans have been completed.`,
+        type: 'success',
+        scanCount: updatedLog.length,
+        targetLimit
+      });
     } else {
       playBeep('success');
       showToast(`Scan #${updatedLog.length} recorded: "${decodedText}"`, 'success');
+      
+      setActiveAlert({
+        title: 'Scan Recorded!',
+        text: `QR code "${decodedText}" has been registered successfully.`,
+        type: 'success',
+        scanCount: updatedLog.length,
+        targetLimit
+      });
     }
 
     // Publish state back to SSE topic: duplicate = false
@@ -154,7 +192,7 @@ export default function App() {
   // Update ref to hold latest state values and scan success handler
   useEffect(() => {
     scanSuccessRef.current = handleScanSuccess;
-    stateRef.current = { targetLimit, scanLog, allowDuplicates, isTargetReached };
+    stateRef.current = { targetLimit, scanLog, allowDuplicates, isTargetReached, isScanningAllowed };
   });
 
   // Helper to publish states to ntfy.sh
@@ -437,7 +475,7 @@ export default function App() {
               <Scanner
                 onScanSuccess={handleScanSuccess}
                 onScanFailure={handleScanFailure}
-                isDisabled={isTargetReached}
+                isDisabled={isTargetReached || !isScanningAllowed}
               />
             )}
 
@@ -525,17 +563,37 @@ export default function App() {
                 <CheckCircle2 size={52} style={{ color: 'var(--primary)', marginBottom: '0.5rem', margin: '0 auto' }} />
                 <h2 style={{ fontSize: '1.4rem', color: 'var(--primary)', marginTop: '0.5rem' }}>{activeAlert.title}</h2>
                 <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4, marginTop: '0.25rem' }}>{activeAlert.text}</p>
+                
+                {activeAlert.scanCount !== undefined && (
+                  <div className="modal-stats" style={{ margin: '0.75rem 0', width: '100%' }}>
+                    <div className="stat-box">
+                      <span className="stat-value">{activeAlert.scanCount}</span>
+                      <span className="stat-label">Scans Completed</span>
+                    </div>
+                    <div className="modal-divider"></div>
+                    <div className="stat-box">
+                      <span className="stat-value">{activeAlert.targetLimit}</span>
+                      <span className="stat-label">Target Limit</span>
+                    </div>
+                  </div>
+                )}
+
                 <button 
                   className="btn btn-primary" 
                   onClick={() => {
                     setActiveAlert(null);
-                    // Reset mobile URL to clear scan parameter so camera is ready again
-                    const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
-                    window.history.replaceState({}, document.title, cleanUrl);
+                    setIsScanningAllowed(true);
+                    
+                    // Reset mobile URL parameter if applicable
+                    const params = new URLSearchParams(window.location.search);
+                    if (params.get('scan')) {
+                      const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
+                      window.history.replaceState({}, document.title, cleanUrl);
+                    }
                   }}
-                  style={{ width: '100%', marginTop: '1rem' }}
+                  style={{ width: '100%', marginTop: '0.75rem' }}
                 >
-                  Scan Another
+                  OK
                 </button>
               </>
             )}
@@ -545,17 +603,37 @@ export default function App() {
                 <AlertTriangle size={52} style={{ color: 'var(--warning)', marginBottom: '0.5rem', margin: '0 auto' }} />
                 <h2 style={{ fontSize: '1.4rem', color: 'var(--warning)', marginTop: '0.5rem' }}>{activeAlert.title}</h2>
                 <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4, marginTop: '0.25rem' }}>{activeAlert.text}</p>
+                
+                {activeAlert.scanCount !== undefined && (
+                  <div className="modal-stats" style={{ margin: '0.75rem 0', width: '100%' }}>
+                    <div className="stat-box">
+                      <span className="stat-value">{activeAlert.scanCount}</span>
+                      <span className="stat-label">Current Count</span>
+                    </div>
+                    <div className="modal-divider"></div>
+                    <div className="stat-box">
+                      <span className="stat-value">{activeAlert.targetLimit}</span>
+                      <span className="stat-label">Target Limit</span>
+                    </div>
+                  </div>
+                )}
+
                 <button 
                   className="btn btn-secondary" 
                   onClick={() => {
                     setActiveAlert(null);
-                    // Reset mobile URL to clear scan parameter so camera is ready again
-                    const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
-                    window.history.replaceState({}, document.title, cleanUrl);
+                    setIsScanningAllowed(true);
+                    
+                    // Reset mobile URL parameter if applicable
+                    const params = new URLSearchParams(window.location.search);
+                    if (params.get('scan')) {
+                      const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
+                      window.history.replaceState({}, document.title, cleanUrl);
+                    }
                   }}
-                  style={{ width: '100%', marginTop: '1rem' }}
+                  style={{ width: '100%', marginTop: '0.75rem' }}
                 >
-                  Try Another
+                  OK
                 </button>
               </>
             )}
