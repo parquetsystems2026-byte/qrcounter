@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle } from 'lucide-react';
+import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle, RefreshCw } from 'lucide-react';
 import Scanner from './components/Scanner';
 import Generator from './components/Generator';
 import CompletionModal from './components/CompletionModal';
@@ -21,6 +21,7 @@ export default function App() {
   const [lastPhoneScanVal, setLastPhoneScanVal] = useState('');
   const [phoneStatus, setPhoneStatus] = useState('sending'); // 'sending' | 'success' | 'duplicate' | 'complete'
   const [mobileStats, setMobileStats] = useState({ count: 0, limit: 15 });
+  const [activeAlert, setActiveAlert] = useState(null); // null or { title, text, type: 'success' | 'warning' | 'loading' }
 
   // Refs to hold active scan values
   const scanSuccessRef = useRef(null);
@@ -314,83 +315,7 @@ export default function App() {
   const progressRatio = targetLimit > 0 ? Math.min(scanCount / targetLimit, 1) : 0;
   const strokeDashoffset = circumference - progressRatio * circumference;
 
-  if (isPhoneScanSuccess) {
-    return (
-      <div className="app-container" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div className="card text-center" style={{ maxWidth: '400px', width: '100%', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '2.5rem 1.5rem', alignItems: 'center' }}>
-          
-          {phoneStatus === 'sending' && (
-            <>
-              <RefreshCw className="animate-spin" size={56} style={{ color: 'var(--secondary)' }} />
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Processing Scan...</h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
-                Connecting to dashboard and registering <strong>{lastPhoneScanVal}</strong>...
-              </p>
-            </>
-          )}
-
-          {phoneStatus === 'success' && (
-            <>
-              <CheckCircle2 size={56} style={{ color: 'var(--primary)', marginBottom: '0.25rem' }} />
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>Scanned Successfully!</h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
-                QR code <strong>{lastPhoneScanVal}</strong> has been registered on the dashboard.
-              </p>
-              <div className="modal-stats" style={{ margin: '0.5rem 0', width: '100%' }}>
-                <div className="stat-box">
-                  <span className="stat-value">{mobileStats.count}</span>
-                  <span className="stat-label">Scans Completed</span>
-                </div>
-                <div className="modal-divider"></div>
-                <div className="stat-box">
-                  <span className="stat-value">{mobileStats.limit}</span>
-                  <span className="stat-label">Target Limit</span>
-                </div>
-              </div>
-            </>
-          )}
-
-          {phoneStatus === 'duplicate' && (
-            <>
-              <AlertTriangle size={56} style={{ color: 'var(--warning)', marginBottom: '0.25rem' }} />
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--warning)' }}>Already Scanned!</h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
-                QR code <strong>{lastPhoneScanVal}</strong> has already been scanned in this session.
-              </p>
-              <div className="modal-stats" style={{ margin: '0.5rem 0', width: '100%' }}>
-                <div className="stat-box">
-                  <span className="stat-value">{mobileStats.count}</span>
-                  <span className="stat-label">Current Count</span>
-                </div>
-                <div className="modal-divider"></div>
-                <div className="stat-box">
-                  <span className="stat-value">{mobileStats.limit}</span>
-                  <span className="stat-label">Target Limit</span>
-                </div>
-              </div>
-            </>
-          )}
-
-          {phoneStatus === 'complete' && (
-            <>
-              <CheckCircle2 size={56} style={{ color: 'var(--primary)', marginBottom: '0.25rem' }} />
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>Limit Reached!</h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
-                Goal completed! All <strong>{mobileStats.limit} of {mobileStats.limit}</strong> scans have been completed.
-              </p>
-            </>
-          )}
-
-          <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', fontWeight: '600', border: '1px solid var(--border-color)', marginTop: '0.5rem' }}>
-            Session Room: {sessionId}
-          </div>
-          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            You can close this browser tab now or scan another code.
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // Removed full-page mobile replacement view in favor of modal popups overlaying the dashboard.
 
   return (
     <div className="app-container">
@@ -580,6 +505,63 @@ export default function App() {
           uniqueCount={scanLog.filter(item => !item.isDuplicate).length}
           onReset={handleResetSession}
         />
+      )}
+
+      {/* Scan Feedback Popup Modal */}
+      {activeAlert && (
+        <div className="modal-overlay">
+          <div className="modal-card" style={{ maxWidth: '380px', padding: '2rem 1.5rem', textAlign: 'center' }}>
+            
+            {activeAlert.type === 'loading' && (
+              <>
+                <RefreshCw className="animate-spin" size={48} style={{ color: 'var(--secondary)', marginBottom: '0.5rem', margin: '0 auto' }} />
+                <h2 style={{ fontSize: '1.4rem', marginTop: '0.5rem' }}>{activeAlert.title}</h2>
+                <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>{activeAlert.text}</p>
+              </>
+            )}
+
+            {activeAlert.type === 'success' && (
+              <>
+                <CheckCircle2 size={52} style={{ color: 'var(--primary)', marginBottom: '0.5rem', margin: '0 auto' }} />
+                <h2 style={{ fontSize: '1.4rem', color: 'var(--primary)', marginTop: '0.5rem' }}>{activeAlert.title}</h2>
+                <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4, marginTop: '0.25rem' }}>{activeAlert.text}</p>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={() => {
+                    setActiveAlert(null);
+                    // Reset mobile URL to clear scan parameter so camera is ready again
+                    const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
+                    window.history.replaceState({}, document.title, cleanUrl);
+                  }}
+                  style={{ width: '100%', marginTop: '1rem' }}
+                >
+                  Scan Another
+                </button>
+              </>
+            )}
+
+            {activeAlert.type === 'warning' && (
+              <>
+                <AlertTriangle size={52} style={{ color: 'var(--warning)', marginBottom: '0.5rem', margin: '0 auto' }} />
+                <h2 style={{ fontSize: '1.4rem', color: 'var(--warning)', marginTop: '0.5rem' }}>{activeAlert.title}</h2>
+                <p style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.4, marginTop: '0.25rem' }}>{activeAlert.text}</p>
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={() => {
+                    setActiveAlert(null);
+                    // Reset mobile URL to clear scan parameter so camera is ready again
+                    const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
+                    window.history.replaceState({}, document.title, cleanUrl);
+                  }}
+                  style={{ width: '100%', marginTop: '1rem' }}
+                >
+                  Try Another
+                </button>
+              </>
+            )}
+
+          </div>
+        </div>
       )}
 
       {/* Toast Notification */}

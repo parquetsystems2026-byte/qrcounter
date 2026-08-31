@@ -375,24 +375,35 @@ input[type="number"]:focus, input[type="text"]:focus {
 }
 
 /* Adjust standard library element overrides */
-#qr-reader {
+#reader {
   width: 100% !important;
   border: none !important;
   background: transparent !important;
 }
 
-#qr-reader img {
+#reader canvas {
   display: none !important;
 }
 
-#qr-reader__dashboard {
+#reader video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  border-radius: var(--radius-md) !important;
+}
+
+#reader img {
+  display: none !important;
+}
+
+#reader__dashboard {
   background: transparent !important;
   color: var(--text-primary) !important;
   padding: 0.5rem !important;
 }
 
-#qr-reader__dashboard_section_csr button,
-#qr-reader__dashboard_section_fs button {
+#reader__dashboard_section_csr button,
+#reader__dashboard_section_fs button {
   background: var(--secondary) !important;
   color: white !important;
   border: none !important;
