@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle } from 'lucide-react';
 import Scanner from './components/Scanner';
 import Generator from './components/Generator';
@@ -7,10 +7,22 @@ import CompletionModal from './components/CompletionModal';
 export default function App() {
   const [targetLimit, setTargetLimit] = useState(15);
   const [scanLog, setScanLog] = useState([]);
-  const [activeTab, setActiveTab] = useState('generator'); // 'scanner' | 'generator' | 'help'
+  const [activeTab, setActiveTab] = useState('scanner'); // 'scanner' | 'generator' | 'help'
   const [allowDuplicates, setAllowDuplicates] = useState(false);
   const [isTargetReached, setIsTargetReached] = useState(false);
   const [toast, setToast] = useState(null);
+
+  // Real-time synchronization states
+  const [sessionId, setSessionId] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('session') || `room-${Math.floor(100000 + Math.random() * 900000)}`;
+  });
+  const [isPhoneScanSuccess, setIsPhoneScanSuccess] = useState(false);
+  const [lastPhoneScanVal, setLastPhoneScanVal] = useState('');
+
+  // Ref to hold the latest scan handler to avoid SSE reconnection cycles
+  const scanSuccessRef = useRef(null);
+
 
   // Web Audio Synth for feedback sounds
   const playBeep = (type) => {
@@ -107,21 +119,77 @@ export default function App() {
     }
   };
 
-  // Listen for ?scan=... parameter in browser URL (for generic phone camera scanning)
+  // Update ref to hold latest handleScanSuccess logic
+  useEffect(() => {
+    scanSuccessRef.current = handleScanSuccess;
+  }, [handleScanSuccess]);
+
+  // Publish a scanned payload to ntfy.sh (triggered from the phone scanner client)
+  const publishScanToChannel = async (sessionRoom, payload) => {
+    try {
+      await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
+        method: 'POST',
+        body: payload
+      });
+      showToast(`Scan "${payload}" sent to computer!`, 'success');
+    } catch (err) {
+      console.error('Failed to publish scan to channel:', err);
+      showToast('Sync server offline', 'warning');
+    }
+  };
+
+  // Listen for session parameter in URL and initialize EventSource listener
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const scanPayload = params.get('scan');
+    const sessionParam = params.get('session');
+
+    // 1. Check if we loaded a scan URL link
     if (scanPayload) {
-      // Small timeout to let app finish loading state/sounds
-      setTimeout(() => {
-        handleScanSuccess(scanPayload);
-      }, 500);
-      
-      // Clean query parameter from URL bar to prevent duplicate registers on refresh
-      const cleanUrl = window.location.origin + window.location.pathname;
+      if (sessionParam && sessionParam !== sessionId) {
+        // We are on the phone scanning! Send it to the computer's session
+        publishScanToChannel(sessionParam, scanPayload);
+        setIsPhoneScanSuccess(true);
+        setLastPhoneScanVal(scanPayload);
+      } else {
+        // We are scanning on the main machine directly
+        setTimeout(() => {
+          handleScanSuccess(scanPayload);
+        }, 500);
+      }
+
+      // Clean scan parameters but keep session in URL bar
+      const sessionArg = sessionParam ? `?session=${sessionParam}` : `?session=${sessionId}`;
+      const cleanUrl = window.location.origin + window.location.pathname + sessionArg;
+      window.history.replaceState({}, document.title, cleanUrl);
+    } else {
+      // Push session room to browser URL bar
+      const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
       window.history.replaceState({}, document.title, cleanUrl);
     }
-  }, []);
+
+    // 2. Main screen listener: Connect to ntfy.sh EventSource for real-time counts
+    const topicUrl = `https://ntfy.sh/qrcounter_${sessionId}/sse`;
+    const eventSource = new EventSource(topicUrl);
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        const scannedPayload = data.message;
+        
+        // Execute the latest success handler ref
+        if (scannedPayload && scanSuccessRef.current) {
+          scanSuccessRef.current(scannedPayload);
+        }
+      } catch (err) {
+        console.error('Error parsing SSE event', err);
+      }
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, [sessionId]);
 
   const handleScanFailure = (errorMsg) => {
     // Standard fail log
@@ -161,6 +229,26 @@ export default function App() {
   const progressRatio = targetLimit > 0 ? Math.min(scanCount / targetLimit, 1) : 0;
   const strokeDashoffset = circumference - progressRatio * circumference;
 
+  if (isPhoneScanSuccess) {
+    return (
+      <div className="app-container" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="card text-center" style={{ maxWidth: '400px', width: '100%', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '2.5rem 1.5rem', alignItems: 'center' }}>
+          <CheckCircle2 size={56} style={{ color: 'var(--primary)', marginBottom: '0.25rem' }} />
+          <h2 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Scan Sent!</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
+            Successfully transmitted scan for <strong>{lastPhoneScanVal}</strong> to the computer session dashboard.
+          </p>
+          <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', fontWeight: '600', border: '1px solid var(--border-color)' }}>
+            Session Room: {sessionId}
+          </div>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            You can close this browser tab now or scan another code.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -172,10 +260,13 @@ export default function App() {
             <p className="logo-subtitle">Real-time QR scan counter and generator dashboard</p>
           </div>
         </div>
-        <div>
-          {/* <span style={{ fontSize: '0.8rem', background: 'rgba(255,255,255,0.04)', padding: '0.4rem 0.8rem', borderRadius: '20px', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-            Prototype Mode
-          </span> */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
+          <span style={{ fontSize: '0.8rem', background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', padding: '0.3rem 0.75rem', borderRadius: '12px', fontWeight: '600' }}>
+            Room: {sessionId}
+          </span>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            🟢 Sync Active
+          </span>
         </div>
       </header>
 
@@ -254,13 +345,40 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Dashboard Generator Panel */}
+        {/* Dashboard Tabs & Main Panels */}
         <main className="card" style={{ display: 'flex', flexDirection: 'column' }}>
+          <div className="tabs-header">
+            <button
+              className={`tab-btn ${activeTab === 'scanner' ? 'active' : ''}`}
+              onClick={() => setActiveTab('scanner')}
+            >
+              <ShieldCheck size={16} />
+              Scanner View
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'generator' ? 'active' : ''}`}
+              onClick={() => setActiveTab('generator')}
+            >
+              <QrCode size={16} />
+              QR Generator
+            </button>
+          </div>
+
           <div style={{ flex: 1 }}>
-            <Generator
-              onSimulateScan={handleScanSuccess}
-              isDisabled={isTargetReached}
-            />
+            {activeTab === 'scanner' && (
+              <Scanner
+                onScanSuccess={handleScanSuccess}
+                onScanFailure={handleScanFailure}
+                isDisabled={isTargetReached}
+              />
+            )}
+
+            {activeTab === 'generator' && (
+              <Generator
+                onSimulateScan={handleScanSuccess}
+                isDisabled={isTargetReached}
+              />
+            )}
           </div>
         </main>
       </div>
@@ -272,19 +390,19 @@ export default function App() {
             <ClipboardList style={{ color: 'var(--primary)' }} size={22} />
             <h2>Scan Registry Log</h2>
           </div>
-          {/* {scanLog.length > 0 && (
+          {scanLog.length > 0 && (
             <button className="btn btn-secondary" onClick={handleExportLog} style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
               <FileText size={14} />
               Export log
             </button>
-          )} */}
+          )}
         </div>
 
         {scanLog.length === 0 ? (
           <div className="empty-state">
             <QrCode className="empty-state-icon" size={32} />
             <h3>No codes scanned yet</h3>
-            <p>Generate QR Codes on the right and click "Simulate Scan" to begin.</p>
+            <p>Go to Scanner View to scan with your camera/file, or use the QR Generator to simulate.</p>
           </div>
         ) : (
           <div className="log-list">
