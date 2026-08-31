@@ -19,9 +19,12 @@ export default function App() {
   });
   const [isPhoneScanSuccess, setIsPhoneScanSuccess] = useState(false);
   const [lastPhoneScanVal, setLastPhoneScanVal] = useState('');
+  const [phoneStatus, setPhoneStatus] = useState('sending'); // 'sending' | 'success' | 'duplicate' | 'complete'
+  const [mobileStats, setMobileStats] = useState({ count: 0, limit: 15 });
 
-  // Ref to hold the latest scan handler to avoid SSE reconnection cycles
+  // Refs to hold active scan values
   const scanSuccessRef = useRef(null);
+  const stateRef = useRef({ targetLimit, scanLog, allowDuplicates, isTargetReached });
 
 
   // Web Audio Synth for feedback sounds
@@ -85,6 +88,8 @@ export default function App() {
 
   // Handle a new successful QR scan
   const handleScanSuccess = (decodedText) => {
+    const { targetLimit, scanLog, allowDuplicates, isTargetReached } = stateRef.current;
+
     if (isTargetReached) return;
 
     // Check if duplicate scan
@@ -93,6 +98,15 @@ export default function App() {
     if (isDuplicate && !allowDuplicates) {
       playBeep('duplicate');
       showToast(`Ignored duplicate scan: "${decodedText}"`, 'warning');
+      
+      // Publish state back to SSE topic: duplicate = true
+      publishState(sessionId, {
+        type: 'STATE',
+        scanCount: scanLog.length,
+        targetLimit,
+        duplicate: true,
+        lastPayload: decodedText
+      });
       return;
     }
 
@@ -108,8 +122,9 @@ export default function App() {
     const updatedLog = [newLogItem, ...scanLog];
     setScanLog(updatedLog);
 
-    // Check if target is now reached
-    if (updatedLog.length >= targetLimit) {
+    const isLimitHit = updatedLog.length >= targetLimit;
+
+    if (isLimitHit) {
       setIsTargetReached(true);
       playBeep('complete');
       showToast('Scan target limit reached!', 'success');
@@ -117,21 +132,46 @@ export default function App() {
       playBeep('success');
       showToast(`Scan #${updatedLog.length} recorded: "${decodedText}"`, 'success');
     }
+
+    // Publish state back to SSE topic: duplicate = false
+    publishState(sessionId, {
+      type: 'STATE',
+      scanCount: updatedLog.length,
+      targetLimit,
+      duplicate: false,
+      lastPayload: decodedText,
+      isComplete: isLimitHit
+    });
   };
 
-  // Update ref to hold latest handleScanSuccess logic
+  // Update ref to hold latest state values and scan success handler
   useEffect(() => {
     scanSuccessRef.current = handleScanSuccess;
-  }, [handleScanSuccess]);
+    stateRef.current = { targetLimit, scanLog, allowDuplicates, isTargetReached };
+  });
+
+  // Helper to publish states to ntfy.sh
+  const publishState = async (sessionRoom, stateObj) => {
+    try {
+      await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
+        method: 'POST',
+        body: JSON.stringify(stateObj)
+      });
+    } catch (err) {
+      console.error('Failed to publish state:', err);
+    }
+  };
 
   // Publish a scanned payload to ntfy.sh (triggered from the phone scanner client)
   const publishScanToChannel = async (sessionRoom, payload) => {
     try {
       await fetch(`https://ntfy.sh/qrcounter_${sessionRoom}`, {
         method: 'POST',
-        body: payload
+        body: JSON.stringify({
+          type: 'SCAN',
+          payload
+        })
       });
-      showToast(`Scan "${payload}" sent to computer!`, 'success');
     } catch (err) {
       console.error('Failed to publish scan to channel:', err);
       showToast('Sync server offline', 'warning');
@@ -147,21 +187,61 @@ export default function App() {
     // 1. Check if we loaded a scan URL link
     if (scanPayload) {
       if (sessionParam && sessionParam !== sessionId) {
-        // We are on the phone scanning! Send it to the computer's session
-        publishScanToChannel(sessionParam, scanPayload);
+        // We are on the phone scanning! Connect to the computer's session SSE channel
+        const topicUrl = `https://ntfy.sh/qrcounter_${sessionParam}/sse`;
+        const eventSource = new EventSource(topicUrl);
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            const msgObj = JSON.parse(data.message);
+            
+            if (msgObj.type === 'STATE' && msgObj.lastPayload === scanPayload) {
+              setMobileStats({
+                count: msgObj.scanCount,
+                limit: msgObj.targetLimit
+              });
+              
+              if (msgObj.isComplete) {
+                setPhoneStatus('complete');
+              } else if (msgObj.duplicate) {
+                setPhoneStatus('duplicate');
+              } else {
+                setPhoneStatus('success');
+              }
+            }
+          } catch (err) {
+            // Ignore other message formats
+          }
+        };
+
+        // Send the scan request to the channel
+        const sendScanRequest = async () => {
+          await publishScanToChannel(sessionParam, scanPayload);
+        };
+
+        setTimeout(sendScanRequest, 600);
+
         setIsPhoneScanSuccess(true);
         setLastPhoneScanVal(scanPayload);
+
+        // Keep session in URL bar on mobile
+        const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionParam}`;
+        window.history.replaceState({}, document.title, cleanUrl);
+
+        return () => {
+          eventSource.close();
+        };
       } else {
         // We are scanning on the main machine directly
         setTimeout(() => {
           handleScanSuccess(scanPayload);
         }, 500);
-      }
 
-      // Clean scan parameters but keep session in URL bar
-      const sessionArg = sessionParam ? `?session=${sessionParam}` : `?session=${sessionId}`;
-      const cleanUrl = window.location.origin + window.location.pathname + sessionArg;
-      window.history.replaceState({}, document.title, cleanUrl);
+        // Clean scan parameters but keep session in URL bar
+        const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
     } else {
       // Push session room to browser URL bar
       const cleanUrl = window.location.origin + window.location.pathname + `?session=${sessionId}`;
@@ -175,14 +255,17 @@ export default function App() {
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        const scannedPayload = data.message;
+        const msgObj = JSON.parse(data.message);
         
-        // Execute the latest success handler ref
-        if (scannedPayload && scanSuccessRef.current) {
-          scanSuccessRef.current(scannedPayload);
+        if (msgObj.type === 'SCAN' && msgObj.payload) {
+          handleScanSuccess(msgObj.payload);
         }
       } catch (err) {
-        console.error('Error parsing SSE event', err);
+        // Backward compatibility for raw text payloads
+        const data = JSON.parse(event.data);
+        if (data.message) {
+          handleScanSuccess(data.message);
+        }
       }
     };
 
@@ -233,12 +316,70 @@ export default function App() {
     return (
       <div className="app-container" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div className="card text-center" style={{ maxWidth: '400px', width: '100%', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: '1.25rem', padding: '2.5rem 1.5rem', alignItems: 'center' }}>
-          <CheckCircle2 size={56} style={{ color: 'var(--primary)', marginBottom: '0.25rem' }} />
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Scan Sent!</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
-            Successfully transmitted scan for <strong>{lastPhoneScanVal}</strong> to the computer session dashboard.
-          </p>
-          <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', fontWeight: '600', border: '1px solid var(--border-color)' }}>
+          
+          {phoneStatus === 'sending' && (
+            <>
+              <RefreshCw className="animate-spin" size={56} style={{ color: 'var(--secondary)' }} />
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 800 }}>Processing Scan...</h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
+                Connecting to dashboard and registering <strong>{lastPhoneScanVal}</strong>...
+              </p>
+            </>
+          )}
+
+          {phoneStatus === 'success' && (
+            <>
+              <CheckCircle2 size={56} style={{ color: 'var(--primary)', marginBottom: '0.25rem' }} />
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>Scanned Successfully!</h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
+                QR code <strong>{lastPhoneScanVal}</strong> has been registered on the dashboard.
+              </p>
+              <div className="modal-stats" style={{ margin: '0.5rem 0', width: '100%' }}>
+                <div className="stat-box">
+                  <span className="stat-value">{mobileStats.count}</span>
+                  <span className="stat-label">Scans Completed</span>
+                </div>
+                <div className="modal-divider"></div>
+                <div className="stat-box">
+                  <span className="stat-value">{mobileStats.limit}</span>
+                  <span className="stat-label">Target Limit</span>
+                </div>
+              </div>
+            </>
+          )}
+
+          {phoneStatus === 'duplicate' && (
+            <>
+              <AlertTriangle size={56} style={{ color: 'var(--warning)', marginBottom: '0.25rem' }} />
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--warning)' }}>Already Scanned!</h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
+                QR code <strong>{lastPhoneScanVal}</strong> has already been scanned in this session.
+              </p>
+              <div className="modal-stats" style={{ margin: '0.5rem 0', width: '100%' }}>
+                <div className="stat-box">
+                  <span className="stat-value">{mobileStats.count}</span>
+                  <span className="stat-label">Current Count</span>
+                </div>
+                <div className="modal-divider"></div>
+                <div className="stat-box">
+                  <span className="stat-value">{mobileStats.limit}</span>
+                  <span className="stat-label">Target Limit</span>
+                </div>
+              </div>
+            </>
+          )}
+
+          {phoneStatus === 'complete' && (
+            <>
+              <CheckCircle2 size={56} style={{ color: 'var(--primary)', marginBottom: '0.25rem' }} />
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>Limit Reached!</h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', lineHeight: '1.5' }}>
+                Goal completed! All <strong>{mobileStats.limit} of {mobileStats.limit}</strong> scans have been completed.
+              </p>
+            </>
+          )}
+
+          <div style={{ background: 'var(--bg-secondary)', padding: '0.6rem 1rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', fontWeight: '600', border: '1px solid var(--border-color)', marginTop: '0.5rem' }}>
             Session Room: {sessionId}
           </div>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
