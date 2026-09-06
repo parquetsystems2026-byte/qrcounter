@@ -12,7 +12,7 @@ export default function App() {
   const [scanLog, setScanLog] = useState([]);
   const [activeTab, setActiveTab] = useState('generator'); // 'scanner' | 'generator' | 'help'
   const [allowDuplicates, setAllowDuplicates] = useState(true);
-  const [isTargetReached, setIsTargetReached] = useState(false);
+  const [activePayload, setActivePayload] = useState(null);
   const [toast, setToast] = useState(null);
 
   // Real-time synchronization states
@@ -33,7 +33,7 @@ export default function App() {
 
   // Refs to hold active scan values
   const scanSuccessRef = useRef(null);
-  const stateRef = useRef({ targetLimit, scanLog, allowDuplicates, isTargetReached, isScanningAllowed });
+  const stateRef = useRef({ targetLimit, scanLog, allowDuplicates, isScanningAllowed, activePayload });
 
 
   // Web Audio Synth for feedback sounds
@@ -90,7 +90,7 @@ export default function App() {
   // Reset current scanning session
   const handleResetSession = () => {
     setScanLog([]);
-    setIsTargetReached(false);
+    setActivePayload(null);
     setIsScanningAllowed(true);
     setActiveAlert(null);
     showToast('Session reset successfully. Ready to scan!', 'info');
@@ -108,9 +108,27 @@ export default function App() {
       return;
     }
 
-    const { targetLimit, scanLog, allowDuplicates, isTargetReached, currentUser } = stateRef.current;
+    const { targetLimit, scanLog, allowDuplicates, currentUser } = stateRef.current;
 
-    if (isTargetReached) return;
+    // We no longer have a global isTargetReached that stops all scanning.
+    // Instead we check the count for this specific QR code.
+    const currentPayloadCount = scanLog.filter(item => item.payload === decodedText).length;
+
+    // Check if limit already reached BEFORE this scan
+    if (currentPayloadCount >= targetLimit) {
+      setIsScanningAllowed(false);
+      playBeep('error');
+      showToast(`Limit reached for "${decodedText}". pls contact admin`, 'warning');
+      
+      setActiveAlert({
+        title: 'Target Limit Reached!',
+        text: `The QR code "${decodedText}" has already reached its maximum limit of ${targetLimit} scans. Please contact your admin.`,
+        type: 'warning',
+        scanCount: currentPayloadCount,
+        targetLimit
+      });
+      return;
+    }
 
     // Pause scanning immediately so we wait for the user to review the popup and click OK
     setIsScanningAllowed(false);
@@ -127,14 +145,14 @@ export default function App() {
         title: 'Already Scanned!',
         text: `The QR code "${decodedText}" has already been scanned in this session.`,
         type: 'warning',
-        scanCount: scanLog.length,
+        scanCount: currentPayloadCount,
         targetLimit
       });
 
       // Publish state back to SSE topic: duplicate = true
       publishState(sessionId, {
         type: 'STATE',
-        scanCount: scanLog.length,
+        scanCount: currentPayloadCount,
         targetLimit,
         duplicate: true,
         lastPayload: decodedText
@@ -161,30 +179,31 @@ export default function App() {
 
     const updatedLog = [newLogItem, ...scanLog];
     setScanLog(updatedLog);
+    setActivePayload(decodedText);
 
-    const isLimitHit = updatedLog.length >= targetLimit;
+    const newPayloadCount = currentPayloadCount + 1;
+    const isLimitHit = newPayloadCount >= targetLimit;
 
     if (isLimitHit) {
-      setIsTargetReached(true);
       playBeep('complete');
-      showToast('Scan target limit reached!', 'success');
+      showToast(`Limit reached for "${decodedText}"! pls contact admin`, 'success');
       
       setActiveAlert({
         title: 'Limit Reached!',
-        text: `Limit reached, Please contact your manager`,
+        text: `Limit reached, Please contact your admin`,
         type: 'success',
-        scanCount: updatedLog.length,
+        scanCount: newPayloadCount,
         targetLimit
       });
     } else {
       playBeep('success');
-      showToast(`Scan #${updatedLog.length} recorded: "${decodedText}"`, 'success');
+      showToast(`Scan #${newPayloadCount} recorded: "${decodedText}"`, 'success');
       
       setActiveAlert({
         title: 'Scan Recorded!',
         text: `QR code "${decodedText}" has been registered successfully.`,
         type: 'success',
-        scanCount: updatedLog.length,
+        scanCount: newPayloadCount,
         targetLimit
       });
     }
@@ -192,7 +211,7 @@ export default function App() {
     // Publish state back to SSE topic: duplicate = false
     publishState(sessionId, {
       type: 'STATE',
-      scanCount: updatedLog.length,
+      scanCount: newPayloadCount,
       targetLimit,
       duplicate: false,
       lastPayload: decodedText,
@@ -203,7 +222,7 @@ export default function App() {
   // Update ref to hold latest state values and scan success handler
   useEffect(() => {
     scanSuccessRef.current = handleScanSuccess;
-    stateRef.current = { targetLimit, scanLog, allowDuplicates, isTargetReached, isScanningAllowed, currentUser };
+    stateRef.current = { targetLimit, scanLog, allowDuplicates, isScanningAllowed, currentUser };
   });
 
   // Helper to publish states to ntfy.sh
@@ -360,9 +379,12 @@ export default function App() {
   const stroke = 8;
   const normalizedRadius = radius - stroke * 2;
   const circumference = normalizedRadius * 2 * Math.PI;
-  const scanCount = scanLog.length;
+  const scanCount = activePayload ? scanLog.filter(item => item.payload === activePayload).length : 0;
   const progressRatio = targetLimit > 0 ? Math.min(scanCount / targetLimit, 1) : 0;
   const strokeDashoffset = circumference - progressRatio * circumference;
+  
+  // Calculate unique payloads and their counts for the summary list
+  const uniquePayloads = Array.from(new Set(scanLog.map(item => item.payload)));
 
   // Removed full-page mobile replacement view in favor of modal popups overlaying the dashboard.
 
@@ -433,6 +455,11 @@ export default function App() {
               <span className="progress-label">of {targetLimit}</span>
             </div>
           </div>
+          {activePayload && (
+            <div style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '-1rem', paddingBottom: '1rem' }}>
+              Tracking: <strong>{activePayload}</strong>
+            </div>
+          )}
 
           <div className="settings-section">
             <div className="input-group">
@@ -447,7 +474,6 @@ export default function App() {
                   let val = e.target.value;
                   if (val === '') {
                     setTargetLimit('');
-                    setIsTargetReached(false);
                     return;
                   }
                   val = parseInt(val, 10);
@@ -456,13 +482,6 @@ export default function App() {
                   if (val > 500) val = 500;
                   
                   setTargetLimit(val);
-                  // Dynamic checks in case limit is decreased under current scan log length
-                  if (scanLog.length >= val) {
-                    setIsTargetReached(true);
-                    playBeep('complete');
-                  } else {
-                    setIsTargetReached(false);
-                  }
                 }}
                 onBlur={() => {
                   if (targetLimit === '') {
@@ -473,7 +492,6 @@ export default function App() {
                     setTargetLimit(500);
                   }
                 }}
-                disabled={isTargetReached}
               />
             </div>
 
@@ -494,6 +512,24 @@ export default function App() {
               Reset Session
             </button>
           </div>
+
+          {uniquePayloads.length > 0 && (
+            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '0.5rem' }}>
+              <h3 style={{ fontSize: '0.9rem', marginBottom: '0.75rem', color: 'var(--text-secondary)' }}>Scanned QR Codes</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '150px', overflowY: 'auto' }}>
+                {uniquePayloads.map(payload => {
+                  const count = scanLog.filter(item => item.payload === payload).length;
+                  const isFull = count >= targetLimit;
+                  return (
+                    <div key={payload} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '0.5rem', background: isFull ? '#dcfce7' : '#f1f5f9', borderRadius: '4px', cursor: 'pointer' }} onClick={() => setActivePayload(payload)}>
+                      <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px' }}>{payload}</span>
+                      <span style={{ color: isFull ? '#166534' : 'var(--text-secondary)' }}>{count} / {targetLimit}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </aside>
 
         {/* Dashboard Tabs & Main Panels */}
@@ -520,14 +556,14 @@ export default function App() {
               <Scanner
                 onScanSuccess={handleScanSuccess}
                 onScanFailure={handleScanFailure}
-                isDisabled={isTargetReached || !isScanningAllowed}
+                isDisabled={!isScanningAllowed}
               />
             )}
 
             {activeTab === 'generator' && (
               <Generator
                 onSimulateScan={handleScanSuccess}
-                isDisabled={isTargetReached}
+                isDisabled={false}
               />
             )}
           </div>
@@ -580,16 +616,6 @@ export default function App() {
           </div>
         )}
       </section>
-
-      {/* Completion Celebration Overlay */}
-      {isTargetReached && (
-        <CompletionModal
-          scanLimit={targetLimit}
-          totalScans={scanLog.length}
-          uniqueCount={scanLog.filter(item => !item.isDuplicate).length}
-          onReset={handleResetSession}
-        />
-      )}
 
       {/* Scan Feedback Popup Modal */}
       {activeAlert && (
