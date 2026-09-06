@@ -3,22 +3,17 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Download, Play, RefreshCw, Check } from 'lucide-react';
 
 let qrCounter = 1;
-const makeNextQRId = () => {
-  const id = String(qrCounter).padStart(4, '0');
-  qrCounter++;
-  return id;
-};
+let currentQRId = '0001';
 
 export default function Generator({ onSimulateScan, isDisabled }) {
-  const [qrId, setQrId] = useState('');
+  const [qrId, setQrId] = useState(currentQRId);
   const [downloaded, setDownloaded] = useState(false);
 
-  useEffect(() => {
-    setQrId(makeNextQRId());
-  }, []);
-
   const handleGenerateNew = () => {
-    setQrId(makeNextQRId());
+    qrCounter++;
+    const nextId = String(qrCounter).padStart(4, '0');
+    currentQRId = nextId;
+    setQrId(nextId);
     setDownloaded(false);
   };
 

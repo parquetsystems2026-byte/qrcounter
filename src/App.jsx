@@ -5,6 +5,20 @@ import Generator from './components/Generator';
 import CompletionModal from './components/CompletionModal';
 import Login from './components/Login';
 
+export const formatPayload = (payload) => {
+  if (!payload) return '';
+  try {
+    const url = new URL(payload);
+    const scanId = url.searchParams.get('scan');
+    if (scanId) return scanId;
+  } catch (e) {
+    if (payload.includes('scan=')) {
+      return payload.split('scan=')[1].split('&')[0];
+    }
+  }
+  return payload;
+};
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
@@ -118,11 +132,11 @@ export default function App() {
     if (currentPayloadCount >= targetLimit) {
       setIsScanningAllowed(false);
       playBeep('error');
-      showToast(`Limit reached for "${decodedText}". pls contact admin`, 'warning');
+      showToast(`Limit reached for "${formatPayload(decodedText)}". pls contact admin`, 'warning');
       
       setActiveAlert({
         title: 'Target Limit Reached!',
-        text: `The QR code "${decodedText}" has already reached its maximum limit of ${targetLimit} scans. Please contact your admin.`,
+        text: `The QR code "${formatPayload(decodedText)}" has already reached its maximum limit of ${targetLimit} scans. Please contact your admin.`,
         type: 'warning',
         scanCount: currentPayloadCount,
         targetLimit
@@ -138,12 +152,12 @@ export default function App() {
 
     if (isDuplicate && !allowDuplicates) {
       playBeep('duplicate');
-      showToast(`Ignored duplicate scan: "${decodedText}"`, 'warning');
+      showToast(`Ignored duplicate scan: "${formatPayload(decodedText)}"`, 'warning');
       
       // Show warning popup
       setActiveAlert({
         title: 'Already Scanned!',
-        text: `The QR code "${decodedText}" has already been scanned in this session.`,
+        text: `The QR code "${formatPayload(decodedText)}" has already been scanned in this session.`,
         type: 'warning',
         scanCount: currentPayloadCount,
         targetLimit
@@ -186,7 +200,7 @@ export default function App() {
 
     if (isLimitHit) {
       playBeep('complete');
-      showToast(`Limit reached for "${decodedText}"! pls contact admin`, 'success');
+      showToast(`Limit reached for "${formatPayload(decodedText)}"! pls contact admin`, 'success');
       
       setActiveAlert({
         title: 'Limit Reached!',
@@ -197,11 +211,11 @@ export default function App() {
       });
     } else {
       playBeep('success');
-      showToast(`Scan #${newPayloadCount} recorded: "${decodedText}"`, 'success');
+      showToast(`Scan #${newPayloadCount} recorded: "${formatPayload(decodedText)}"`, 'success');
       
       setActiveAlert({
         title: 'Scan Recorded!',
-        text: `QR code "${decodedText}" has been registered successfully.`,
+        text: `QR code "${formatPayload(decodedText)}" has been registered successfully.`,
         type: 'success',
         scanCount: newPayloadCount,
         targetLimit
@@ -457,7 +471,7 @@ export default function App() {
           </div>
           {activePayload && (
             <div style={{ textAlign: 'center', fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '-1rem', paddingBottom: '1rem' }}>
-              Tracking: <strong>{activePayload}</strong>
+              Tracking: <strong>{formatPayload(activePayload)}</strong>
             </div>
           )}
 
@@ -513,23 +527,6 @@ export default function App() {
             </button>
           </div>
 
-          {uniquePayloads.length > 0 && (
-            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '1rem', marginTop: '0.5rem' }}>
-              <h3 style={{ fontSize: '0.9rem', marginBottom: '0.75rem', color: 'var(--text-secondary)' }}>Scanned QR Codes</h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '150px', overflowY: 'auto' }}>
-                {uniquePayloads.map(payload => {
-                  const count = scanLog.filter(item => item.payload === payload).length;
-                  const isFull = count >= targetLimit;
-                  return (
-                    <div key={payload} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '0.5rem', background: isFull ? '#dcfce7' : '#f1f5f9', borderRadius: '4px', cursor: 'pointer' }} onClick={() => setActivePayload(payload)}>
-                      <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '120px' }}>{payload}</span>
-                      <span style={{ color: isFull ? '#166534' : 'var(--text-secondary)' }}>{count} / {targetLimit}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </aside>
 
         {/* Dashboard Tabs & Main Panels */}
@@ -570,6 +567,27 @@ export default function App() {
         </main>
       </div>
 
+      {/* Scanned QR Codes Summary */}
+      {uniquePayloads.length > 0 && (
+        <section className="card" style={{ marginBottom: '1.5rem' }}>
+          <h3 style={{ fontSize: '1.1rem', marginBottom: '1rem', color: 'var(--text-primary)', fontWeight: 600 }}>
+            Scanned QR Codes
+          </h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.75rem' }}>
+            {uniquePayloads.map(payload => {
+              const count = scanLog.filter(item => item.payload === payload).length;
+              const isFull = count >= targetLimit;
+              return (
+                <div key={payload} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem', padding: '0.75rem', background: isFull ? '#dcfce7' : '#f1f5f9', borderRadius: '6px', cursor: 'pointer', border: '1px solid ' + (isFull ? '#bbf7d0' : '#e2e8f0') }} onClick={() => setActivePayload(payload)}>
+                  <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}>{formatPayload(payload)}</span>
+                  <span style={{ color: isFull ? '#166534' : 'var(--text-secondary)' }}>{count} / {targetLimit}</span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Bottom Log Section */}
       <section className="card log-section">
         <div className="log-header">
@@ -592,27 +610,28 @@ export default function App() {
             <p>Go to Scanner View to scan with your camera/file, or use the QR Generator to simulate.</p>
           </div>
         ) : (
-          <div className="log-list">
-            {scanLog.map((item) => (
-              <div key={item.id} className="log-item">
-                <div className="log-item-info">
-                  <span className="log-index">#{item.index}</span>
-                  <div>
-                    <div className="log-payload">{item.payload}</div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Decoded Payload</span>
-                  </div>
-                </div>
-                <div className="log-meta">
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{item.username}</span>
-                  <span>{item.timestamp}</span>
-                  {item.isDuplicate ? (
-                    <span className="badge badge-dup">Duplicate</span>
-                  ) : (
-                    <span className="badge badge-new">New</span>
-                  )}
-                </div>
-              </div>
-            ))}
+          <div className="table-responsive" style={{ maxHeight: '250px', overflowY: 'auto' }}>
+            <table className="scan-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+              <thead style={{ position: 'sticky', top: 0, background: '#ffffff', zIndex: 1 }}>
+                <tr>
+                  <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', color: 'var(--text-secondary)', fontWeight: 600 }}>QR.</th>
+                  <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', color: 'var(--text-secondary)', fontWeight: 600 }}>User.</th>
+                  <th style={{ padding: '0.75rem', borderBottom: '2px solid var(--border-color)', color: 'var(--text-secondary)', fontWeight: 600 }}>Date time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scanLog.map((item) => (
+                  <tr key={item.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                    <td style={{ padding: '0.75rem', fontWeight: 500, color: 'var(--text-primary)' }}>
+                      {formatPayload(item.payload)}
+                      {item.isDuplicate && <span className="badge badge-dup" style={{ marginLeft: '0.5rem' }}>Duplicate</span>}
+                    </td>
+                    <td style={{ padding: '0.75rem', color: 'var(--text-primary)' }}>{item.username}</td>
+                    <td style={{ padding: '0.75rem', color: 'var(--text-secondary)' }}>{item.timestamp}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </section>
