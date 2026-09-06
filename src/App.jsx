@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle, RefreshCw } from 'lucide-react';
+import { QrCode, RotateCcw, ShieldCheck, ClipboardList, Info, FileText, CheckCircle2, AlertTriangle, Settings, Eye, HelpCircle, RefreshCw, LogOut } from 'lucide-react';
 import Scanner from './components/Scanner';
 import Generator from './components/Generator';
 import CompletionModal from './components/CompletionModal';
+import Login from './components/Login';
 
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
   const [targetLimit, setTargetLimit] = useState(15);
   const [scanLog, setScanLog] = useState([]);
   const [activeTab, setActiveTab] = useState('generator'); // 'scanner' | 'generator' | 'help'
@@ -105,7 +108,7 @@ export default function App() {
       return;
     }
 
-    const { targetLimit, scanLog, allowDuplicates, isTargetReached } = stateRef.current;
+    const { targetLimit, scanLog, allowDuplicates, isTargetReached, currentUser } = stateRef.current;
 
     if (isTargetReached) return;
 
@@ -140,11 +143,19 @@ export default function App() {
     }
 
     // Add to scan registry
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    const formattedDate = `${day}/${month}/${year}`;
+    const formattedTime = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
     const newLogItem = {
       id: Date.now() + Math.random().toString(36).substr(2, 9),
       index: scanLog.length + 1,
       payload: decodedText,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      timestamp: `${formattedDate} ${formattedTime}`,
+      username: currentUser || 'Anonymous',
       isDuplicate,
     };
 
@@ -160,7 +171,7 @@ export default function App() {
       
       setActiveAlert({
         title: 'Limit Reached!',
-        text: `Goal completed! All ${updatedLog.length} of ${targetLimit} scans have been completed.`,
+        text: `Limit reached, Please contact your manager`,
         type: 'success',
         scanCount: updatedLog.length,
         targetLimit
@@ -192,7 +203,7 @@ export default function App() {
   // Update ref to hold latest state values and scan success handler
   useEffect(() => {
     scanSuccessRef.current = handleScanSuccess;
-    stateRef.current = { targetLimit, scanLog, allowDuplicates, isTargetReached, isScanningAllowed };
+    stateRef.current = { targetLimit, scanLog, allowDuplicates, isTargetReached, isScanningAllowed, currentUser };
   });
 
   // Helper to publish states to ntfy.sh
@@ -327,10 +338,10 @@ export default function App() {
     content += `Target Limit: ${targetLimit}\n`;
     content += `Export Time: ${new Date().toLocaleString()}\n`;
     content += `==============================================\n\n`;
-    content += `Index | Timestamp | Payload | Type\n`;
+    content += `Index | User | Timestamp | Payload | Type\n`;
     
     scanLog.forEach((item) => {
-      content += `#${item.index} | ${item.timestamp} | ${item.payload} | ${item.isDuplicate ? 'Duplicate' : 'New'}\n`;
+      content += `#${item.index} | ${item.username} | ${item.timestamp} | ${item.payload} | ${item.isDuplicate ? 'Duplicate' : 'New'}\n`;
     });
 
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -355,6 +366,15 @@ export default function App() {
 
   // Removed full-page mobile replacement view in favor of modal popups overlaying the dashboard.
 
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setCurrentUser(null);
+  };
+
+  if (!isLoggedIn) {
+    return <Login onLogin={(user) => { setIsLoggedIn(true); setCurrentUser(user); }} />;
+  }
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -366,13 +386,19 @@ export default function App() {
             <p className="logo-subtitle">Real-time QR scan counter and generator dashboard</p>
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.8rem', background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', padding: '0.3rem 0.75rem', borderRadius: '12px', fontWeight: '600' }}>
-            Room: {sessionId}
-          </span>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-            🟢 Sync Active
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
+            <span style={{ fontSize: '0.8rem', background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', padding: '0.3rem 0.75rem', borderRadius: '12px', fontWeight: '600' }}>
+              Room: {sessionId}
+            </span>
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+              🟢 Sync Active
+            </span>
+          </div>
+          <button onClick={handleLogout} className="btn btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem' }}>
+            <LogOut size={16} />
+            Logout
+          </button>
         </div>
       </header>
 
@@ -414,11 +440,21 @@ export default function App() {
               <input
                 id="limit-input"
                 type="number"
-                min="1"
-                max="999"
+                min="0"
+                max="500"
                 value={targetLimit}
                 onChange={(e) => {
-                  const val = parseInt(e.target.value) || 1;
+                  let val = e.target.value;
+                  if (val === '') {
+                    setTargetLimit('');
+                    setIsTargetReached(false);
+                    return;
+                  }
+                  val = parseInt(val, 10);
+                  if (isNaN(val)) return;
+                  
+                  if (val > 500) val = 500;
+                  
                   setTargetLimit(val);
                   // Dynamic checks in case limit is decreased under current scan log length
                   if (scanLog.length >= val) {
@@ -426,6 +462,15 @@ export default function App() {
                     playBeep('complete');
                   } else {
                     setIsTargetReached(false);
+                  }
+                }}
+                onBlur={() => {
+                  if (targetLimit === '') {
+                    setTargetLimit(0);
+                  } else if (targetLimit < 0) {
+                    setTargetLimit(0);
+                  } else if (targetLimit > 500) {
+                    setTargetLimit(500);
                   }
                 }}
                 disabled={isTargetReached}
@@ -522,6 +567,7 @@ export default function App() {
                   </div>
                 </div>
                 <div className="log-meta">
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{item.username}</span>
                   <span>{item.timestamp}</span>
                   {item.isDuplicate ? (
                     <span className="badge badge-dup">Duplicate</span>

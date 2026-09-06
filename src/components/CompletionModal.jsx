@@ -33,9 +33,9 @@ export default function CompletionModal({ scanLimit, totalScans, uniqueCount, on
           <Award size={44} />
         </div>
 
-        <h2>Goal Completed!</h2>
+        <h2>Limit Reached!</h2>
         <p>
-          Fantastic! You have successfully reached your scanning target. The system has stopped recording further scans automatically.
+          Limit reached, Please contact your manager
         </p>
 
         <div className="modal-stats">
